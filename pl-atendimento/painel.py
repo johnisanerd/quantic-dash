@@ -817,7 +817,7 @@ def fila(status=None, busca=None, responsavel=None, chatid=None, usuario=None):
         dt = quando(r["ultimo_ts"])
         out.append({"chatid": r["chatid"], "fone": r["fone"], "nome": r["nome"],
                     "status": r["status"], "responsavel": r["responsavel"], "venda": vendas.get(r["chatid"]),
-                    "ultimo_ts": r["ultimo_ts"], "ultimo_lead_ts": (r["ultimo_lead_ts"] if "ultimo_lead_ts" in r.keys() else None), "quando": dt.strftime("%d/%m %H:%M"),
+                    "ultimo_de": r["ultimo_de"], "ultimo_ts": r["ultimo_ts"], "ultimo_lead_ts": (r["ultimo_lead_ts"] if "ultimo_lead_ts" in r.keys() else None), "quando": dt.strftime("%d/%m %H:%M"),
                     "ha": humano(dt),
                     "ultima": (u["texto"] if u and u["texto"]
                                else rotulo(u["tipo"], u["segundos"]) if u else "")})
@@ -1088,6 +1088,15 @@ def contagem():
         + SEM_SUPORTE).fetchone()["n"]
     d["_ocultos"] = c.execute(
         "SELECT COUNT(*) n FROM leads WHERE oculto=1").fetchone()["n"]
+    # Bolinhas de alerta (16/10/2026, pedido da Dione): por aba, quantas conversas têm a última
+    # mensagem do CLIENTE (ninguém respondeu ainda). Some quando a gente responde.
+    pend, pend_resp = {}, {}
+    for r in c.execute("SELECT COALESCE(status,'NOVO') etapa, COALESCE(NULLIF(TRIM(responsavel),''),'') resp, COUNT(*) n"
+                       " FROM leads WHERE ultimo_de='lead' AND COALESCE(oculto,0)=0" + SEM_SUPORTE + " GROUP BY 1,2"):
+        pend[r["etapa"]] = pend.get(r["etapa"], 0) + r["n"]
+        pend_resp.setdefault(r["resp"], {})[r["etapa"]] = r["n"]
+    pend["_esperando"] = d["_esperando"]
+    d["_pendentes"], d["_pendentes_resp"] = pend, pend_resp
     por_responsavel = {}
     sem_resposta_responsavel = {}
     for r in c.execute(
@@ -1587,6 +1596,8 @@ display:flex;flex-direction:column;gap:7px;pointer-events:none}
 border:1px solid var(--linha);border-left:3px solid var(--roxo);border-radius:10px;
 box-shadow:0 8px 28px #0004;pointer-events:auto;animation:notifica-in .18s ease-out}
 .notificacao:hover{background:var(--hover)}
+.alerta-aba{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-left:4px;box-shadow:0 0 0 2px var(--card,#fff);vertical-align:top}
+.ponto-resposta{display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;margin-left:6px;vertical-align:middle;box-shadow:0 0 0 2px #22c55e33}
 .ativar-avisos{position:fixed;right:14px;bottom:14px;z-index:41;padding:9px 13px;border-radius:10px;border:1px solid var(--borda,#ddd);background:var(--card);color:var(--txt);font:600 12.5px inherit;cursor:pointer;box-shadow:0 6px 20px #0003}
 .notificacao-titulo{display:block;font-size:12px;font-weight:700;line-height:1.3}
 .notificacao-msg{display:-webkit-box;margin-top:2px;color:var(--previa);font-size:11.5px;line-height:1.35;
@@ -1957,7 +1968,7 @@ async function carrega(){
       onchange="marca('${esc(p.chatid)}',this.checked)"><span class="avatar">${icone('user')}</span><div class="item-body">
       <div class="top"><span class="nome">${esc(p.nome||p.fone)}</span>
       <span class="h">${esc(p.ha)}</span></div>
-      <span class="responsavel-tag" data-responsavel="${esc(p.responsavel||'')}">${tagResponsavel(p.responsavel)}</span>
+      <span class="responsavel-tag" data-responsavel="${esc(p.responsavel||'')}">${tagResponsavel(p.responsavel)}</span>${p.ultimo_de==='lead'&&!p.grupo?'<i class="ponto-resposta" title="Cliente mandou mensagem e ainda não respondemos" aria-label="Esperando sua resposta"></i>':''}
       <div class="msg">${esc(p.ultima)}</div>
       <div style="margin-top:6px;display:flex;gap:5px">
         ${p.grupo?'<span class="pill">Grupo do catálogo</span>':''}<span class="pill ${cls(p.status)}">${esc(p.status)}</span>
@@ -2056,6 +2067,13 @@ async function disparaMassa(){
   }
 }
 
+// Bolinha vermelha (16/10/2026): a aba tem conversa em que o cliente falou por último. Respeita o filtro de responsável.
+function pendAba(n,k){
+  if(k==='_sem_resposta'||k==='_ocultos') return 0;
+  if(filtroResponsavel){ const m=(n._pendentes_resp||{})[filtroResponsavel==='_sem_responsavel'?'':filtroResponsavel]||{};
+    return k==='_esperando'?Object.entries(m).filter(([e])=>e!=='CONVERTIDO'&&e!=='PERDIDO').reduce((a,[,x])=>a+x,0):(m[k]||0); }
+  return (n._pendentes||{})[k]||0;
+}
 async function filtros(){
   let n={};
   try{ n=await (await fetch('/api/contagem')).json(); }catch(e){}
@@ -2067,10 +2085,10 @@ async function filtros(){
   document.getElementById('filtros').innerHTML=rot.map(([v,r,k])=>
     `<button class="fbtn${filtro===v?' on':''}" aria-pressed="${filtro===v}" onclick="setFiltro('${v}')">${icone(
       ({'':'chat','_sem_resposta':'clock','NOVO':'tag','EM CONVERSA':'chat','INTERESSADO':'user','AGUARDANDO DADOS':'calendar','EM TESTE':'calendar','TESTE PARADO':'clock','STAND-BY':'clock','CONVERTIDO':'check','PERDIDO':'logout','_ocultos':'logout'})[v]||'tag')}${esc(r)}
-       <b${v===''?' class="naolidas"':''}>${n[k]||0}</b></button>`).join('');
+       <b${v===''?' class="naolidas"':''}>${n[k]||0}</b>${pendAba(n,v===''?'_esperando':k)?'<i class="alerta-aba" title="Tem cliente esperando resposta" aria-label="Tem cliente esperando resposta"></i>':''}</button>`).join('');
 }
 function setFiltro(v){ conversaDestino=null; filtro=v; limpaBusca(false); filtros(); carrega(); }
-function setResponsavelFiltro(v){conversaDestino=null;filtroResponsavel=v;carrega();}
+function setResponsavelFiltro(v){conversaDestino=null;filtroResponsavel=v;carrega();filtros();}
 let dadosGraficoResponsaveis=null;
 function desenhaGraficoResponsaveis(dados){
   dadosGraficoResponsaveis=dados;
