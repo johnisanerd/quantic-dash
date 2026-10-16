@@ -96,7 +96,7 @@ class VisaoTest(unittest.TestCase):
                  crm_lead(8, "novo", None),                      # lista fria sem conversa: não entra
                  crm_lead(9, "proposta_enviada", "Lucas")]       # do Lucas: a Dione não vê
         cats = [{"store_id": "s3", "slug": "loja3", "lead_id": leads[2]["id"], "fone8": "", "produtos": 0, "provas": 0,
-                 "teste_30d": False, "criado_em": "2026-10-01T12:00:00+00:00", "segunda_chance": "2026-10-16T13:00:00+00:00"},
+                 "teste_30d": False, "criado_em": "2026-10-01T12:00:00+00:00", "segunda_chance": "2026-10-16T13:00:00+00:00", "produtos_pos_sc": 2, "provas_pos_sc": 0},
                 {"store_id": "s7", "slug": "loja7", "lead_id": leads[6]["id"], "fone8": "", "produtos": 12, "provas": 40,
                  "teste_30d": True, "entregue_em": "2026-10-04T15:00:00+00:00", "criado_em": "2026-10-03T12:00:00+00:00",
                  "cobranca_pendente": {"valor": 147, "criado_em": "2026-10-15T12:00:00+00:00"}}]
@@ -132,6 +132,9 @@ class VisaoTest(unittest.TestCase):
         # parados (Em conversa em diante, sem convertido): 3 (6 dias), 5 (9), 4 (11) e 7 (15, pela data do CRM)
         self.assertEqual((4, 3, 1), (r["parados_3"], r["parados_7"], r["parados_15"]))
         self.assertEqual(1, r["segunda_chance"])
+        self.assertEqual((0, 1, 0), (r["sc_responderam"], r["sc_cadastraram"], r["sc_provaram"]))
+        self.assertEqual(1, r["teste30"])
+        self.assertTrue(it["3"]["catalogo"]["sc_produtos"] == 2 and not it["3"]["catalogo"]["sc_respondeu"])
         self.assertTrue(v["fontes"]["rpc"])
 
     def test_lucas_ve_todos(self):

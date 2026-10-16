@@ -200,3 +200,64 @@ vazio até a pessoa buscar um lead.
   Sem a função, a visão geral funciona igual, só sem os sinais de catálogo, e mostra um aviso.
 - **Limitação:** "há quanto tempo na etapa" depende do `etapa_historico` (novo) ou das notas "movido para" do CRM.
   Para leads antigos que não estão em Novo aparece "sem registro" até a próxima mudança de etapa.
+
+## Painel de comando + Responder com o Jev (16/10/2026, noite)
+
+**Layout (escolha do Lucas: "Opção 1 · Painel de comando").** No topo, os KPIs clicáveis, que viram filtro:
+esperando resposta, para fazer hoje, parados 3+/7+/15+ dias e segunda chance. Abaixo, a faixa do funil, também
+clicável. Depois vem a lista "🔥 O que fazer hoje". Cada linha tem:
+- a faixa de urgência à esquerda (vermelho ≥ 700, âmbar ≥ 450);
+- a pill da etapa, o motivo e a última interação;
+- as tags de sinais;
+- à direita, o responsável, os dias na etapa e o botão Responder.
+
+Na lateral ficam dois blocos:
+- **🎁 Segunda chance**, com contagens reais: mensagens enviadas, quantas lojas responderam depois e quantas
+  cadastraram produto ou tiveram prova depois.
+- **🗓 Régua 30 dias:** catálogo, dia atual e próxima mensagem.
+
+**Jornada completa sem perder a lista.** Clicar na linha abre um painel lateral largo. Ele tem o cabeçalho de
+resumo, a régua, os marcos e a linha do tempo por dia com filtros. No rodapé fica o quadro "Responder". A URL fica
+`/crm/jornada?lead=<chatid ou id do CRM>`, então dá para compartilhar e recarregar. Fechar (✕, Esc ou clique
+fora) volta à lista com os mesmos filtros e a mesma posição. Os links antigos `?chatid=&crm_id=` continuam valendo.
+
+**Responder.** O quadro mostra:
+- as últimas 8 mensagens (áudio e imagem como rótulo, com a transcrição quando já existe);
+- a sugestão do Jev já na caixa de texto, editável, com uma linha de "por quê";
+- os botões Enviar, Gerar outra sugestão e Abrir no Atendimento.
+
+Os endpoints, todos atrás do mesmo login, com o usuário vindo de `X-Prospeccao-User`:
+- `GET /api/jornada/conversa`
+- `POST /api/jornada/sugestao` (com `nova: true` para outra)
+- `POST /api/jornada/enviar`
+- `POST /api/jornada/descartar`
+
+**Envio:**
+- Usa o mesmo `envia_texto` do Atendimento (Uazapi, `valida_destinatario`, `registra_inicio`, que conta
+  nas metas). O telefone vem do `painel.db`, nunca do navegador.
+- Só envia em conversa privada e só com clique humano.
+- Depois do envio, `ultimo_de='nos'` e a conversa entra como vista por quem enviou, então a bolinha some. A
+  linha sai de "esperando" na hora.
+
+**Sugestão do Jev** (`resposta_jev.py`):
+- **Contexto:** vem da jornada do lead: etapa e há quantos dias, catálogo, produtos e provas, régua 30d,
+  segunda chance, cobrança/proposta e próximos marcos. Entram também as últimas 16 mensagens, com transcrição.
+- **Base e tom:** a base do Assistente (`assistente.BASE`: planos, números, objeções) e o tom da Dione.
+- **Modelo:** Claude (`PL_IA_MODELO` se começar com `claude`, senão `claude-haiku-5-5`, via
+  `ANTHROPIC_API_KEY`). Se falhar, usa o Gemini 2.5 Flash (`GEMINI_KEY`). O prazo total é de 8 s; se nada
+  responder, aparece uma mensagem amigável e a Dione escreve.
+- **Cache:** por (conversa, última mensagem). Abrir de novo não gera outra chamada.
+- **Valores:** um valor em R$ que não está na tabela vira alerta vermelho para conferir.
+- **Log:** fica em `painel.db.resposta_sugestao`: sugestão, por quê, modelo, alerta e resultado (`enviada` como
+  estava, `editada` ou `descartada`, este ao fechar o quadro ou pedir outra), com o texto enviado.
+- **Espelho no Supabase:** `espelho.py` manda esse log para `pl_atend_respostas` se a RPC
+  `pl_atend_espelha_respostas` existir (`sql/pl_atend_respostas.sql`, opcional). Sem ela, para de tentar e o log
+  fica só local.
+
+**SQL desta rodada:**
+1. `sql/crm_jornada_visao.sql`: reaplicar. Acrescenta `produtos_pos_sc` e `provas_pos_sc` para a reação à
+   segunda chance.
+2. `sql/pl_atend_respostas.sql`: opcional, é o espelho do log de respostas.
+
+**Env:** nenhuma nova. Usa `ANTHROPIC_API_KEY`, `PL_IA_MODELO`, `GEMINI_KEY` e `PL_IA_KEY`, que já existem no
+serviço.

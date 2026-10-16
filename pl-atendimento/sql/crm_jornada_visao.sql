@@ -1,5 +1,5 @@
 -- Visão geral da Jornada (tela inicial da aba Jornada do lead) — RPC de LEITURA, em lote.
--- NÃO aplicado. Rodar no SQL Editor do Supabase. Mesma proteção das outras: chave PL_IA_KEY (crm_ia_chave).
+-- Rodar (de novo) no SQL Editor do Supabase — 16/10 tarde: + produtos_pos_sc / provas_pos_sc (reação à segunda chance). Mesma proteção das outras: chave PL_IA_KEY (crm_ia_chave).
 --
 -- Uma linha por catálogo, com o que o servidor não consegue ler com a anon: lead dono (onboarding),
 -- produtos, provas, envios automáticos (régua 30 dias e segunda chance), conta e cobrança pendente.
@@ -39,6 +39,11 @@ begin
       'criado_em', s.created_at, 'entregue_em', s.entregue_em, 'teste_30d', coalesce(s.teste_30d, false), 'ativo', s.is_active,
       'produtos', coalesce(pr.n, 0), 'provas', coalesce(pv.n, 0), 'provas_7d', coalesce(pv.n7, 0), 'ultima_prova', pv.ult,
       'segunda_chance', e.segunda_chance, 'enviados', coalesce(e.enviados, 0), 'erros', coalesce(e.erros, 0),
+      -- reação à segunda chance: produtos cadastrados e provas DEPOIS da mensagem
+      'produtos_pos_sc', case when e.segunda_chance is null then null else
+          (select count(*)::int from pl_catalog_products p where p.store_id = s.id and p.created_at > e.segunda_chance) end,
+      'provas_pos_sc', case when e.segunda_chance is null then null else
+          (select count(*)::int from geracoes_provou_levou g where g.catalog_store_id = s.id and g.created_at > e.segunda_chance) end,
       'proximo', (select jsonb_build_object('dia', t.dia, 'etapa', t.etapa, 'agendado_para', t.agendado_para)
                   from pl_catalog_teste_envios t where (t.store_id = s.id or t.slug = s.slug) and t.status = 'agendado'
                   order by t.agendado_para, t.dia limit 1),

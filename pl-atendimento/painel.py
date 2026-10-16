@@ -21,6 +21,7 @@ import base64
 import grupos_catalogos
 import historico_lead
 import jornada
+import resposta_jev
 import visao_geral
 import tarefas
 import gzip
@@ -308,6 +309,7 @@ def cria_banco():
     sugestao_etapa.init(c)
     tarefas.initialize(c)
     jornada.init(c)
+    resposta_jev.init(c)
     c.executescript("""
     CREATE TABLE IF NOT EXISTS mensagens (
       messageid TEXT PRIMARY KEY, chatid TEXT, ts INTEGER, from_me INTEGER,
@@ -1119,6 +1121,32 @@ def contagem(usuario=None):
                            "sem_resposta": sem_resposta_responsavel.get(n, 0),
                            "etapas": {**dict.fromkeys(STATUS, 0), **por_responsavel.get(n, {})}} for n in nomes]
     return d
+
+
+def envia_pela_jornada(chatid, texto, usuario, sugestao_id=None):
+    """Botão Enviar do quadro Responder (aba Jornada): mesmo envia_texto do Atendimento, sempre por clique humano.
+    O telefone sai do banco (nunca do navegador). Depois do envio a conversa sai de "esperando" e a bolinha some."""
+    u = (usuario or "").strip().lower()
+    if u not in ("lucas", "dione"):
+        raise PermissionError("Login sem acesso ao envio.")
+    texto = str(texto or "").strip()
+    if not texto:
+        raise ValueError("Escreva a mensagem antes de enviar.")
+    if len(texto) > 4000:
+        raise ValueError("Mensagem longa demais (máx. 4.000 caracteres).")
+    if not isinstance(chatid, str) or not chatid.endswith("@s.whatsapp.net"):
+        raise ValueError("Só dá pra enviar pelo painel em conversa privada.")
+    c = con()
+    lead = c.execute("SELECT fone FROM leads WHERE chatid=?", (chatid,)).fetchone()
+    if not lead:
+        raise ValueError("Conversa não encontrada no Atendimento.")
+    envia_texto(chatid, lead["fone"], texto, nome_responsavel(u))
+    c.execute("UPDATE leads SET ultimo_de='nos', oculto=0 WHERE chatid=?", (chatid,))
+    c.commit()
+    marca_vista(chatid, u)
+    resultado = resposta_jev.decide(c, sugestao_id, "enviada", texto) if sugestao_id else None
+    UI_EVENTS.publish()
+    return {"ok": True, "resultado": resultado}
 
 
 def marca_vista(chatid, usuario):
@@ -3096,6 +3124,14 @@ class H(BaseHTTPRequestHandler):
                                                       ensure_ascii=False, separators=(",", ":")))
                 except PermissionError as e:
                     return self._send(403, json.dumps({"erro": str(e)}, ensure_ascii=False))
+            if p.path == "/api/jornada/conversa":
+                try:
+                    return self._send(200, json.dumps(resposta_jev.conversa(con(), self.headers.get("X-Prospeccao-User"),
+                                                                            (q.get("chatid") or [None])[0]), ensure_ascii=False))
+                except PermissionError as e:
+                    return self._send(403, json.dumps({"erro": str(e)}, ensure_ascii=False))
+                except ValueError as e:
+                    return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
             if p.path == "/api/jornada/catalogos30":
                 return self._send(200, json.dumps(jornada.catalogos_30d(CRM_CLIENT, self.headers.get("X-Prospeccao-User")),
                                                   ensure_ascii=False))
@@ -3214,6 +3250,29 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, json.dumps(data, ensure_ascii=False))
                 except Exception as e:
                     return self._send(400, json.dumps({"erro": str(e)[:200]}, ensure_ascii=False))
+            if self.path in ("/api/jornada/sugestao", "/api/jornada/enviar", "/api/jornada/descartar"):
+                origin = self.headers.get("Origin")
+                if self.headers.get("Content-Type", "").split(";")[0] != "application/json" or (
+                        origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host")):
+                    return self._send(403, json.dumps({"erro": "Origem ou formato inválido."}))
+                usuario = self.headers.get("X-Prospeccao-User")
+                try:
+                    if self.path.endswith("/sugestao"):
+                        cid = d.get("chatid")
+                        r = resposta_jev.sugere(con(), usuario, cid,
+                                                lambda: jornada.jornada(con(), CRM_CLIENT, usuario, cid),
+                                                bool(d.get("nova")), nome_vendedor(usuario))
+                    elif self.path.endswith("/enviar"):
+                        r = envia_pela_jornada(d.get("chatid"), d.get("texto"), usuario, d.get("sugestao_id"))
+                    else:
+                        r = {"ok": True, "resultado": resposta_jev.decide(con(), d.get("id"), "descartada")}
+                    return self._send(200, json.dumps(r, ensure_ascii=False))
+                except PermissionError as e:
+                    return self._send(403, json.dumps({"erro": str(e)}, ensure_ascii=False))
+                except ValueError as e:
+                    return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
+                except RuntimeError as e:
+                    return self._send(502, json.dumps({"erro": str(e)[:200]}, ensure_ascii=False))
             if self.path == "/api/sugestao_etapa":
                 origin = self.headers.get("Origin")
                 if self.headers.get("Content-Type", "").split(";")[0] != "application/json" or (

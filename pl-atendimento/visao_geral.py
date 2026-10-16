@@ -265,8 +265,16 @@ def visao(c, crm, usuario, agora=None):
                 prio, motivo = 500, "Catálogo no ar sem produto há %d dias" % (hoje - _iso(cat["criado_em"]).date()).days
             if sc and etapa not in ENCERRADO and prio < 450 and ultima and ultima["ts"] < sc.timestamp():
                 prio, motivo = 450, "Recebeu a segunda chance e ainda não respondeu"
+            # respondeu depois da segunda chance = alguma fala do lojista (privado ou grupo) depois da mensagem
+            ult_lead = max([_seg(x[2]) for x in (a, ag) if x and x[2]] or [0])
+            prox = cat.get("proximo") or None
             cat_info = {"slug": cat.get("slug"), "produtos": prods, "provas": provas, "provas_7d": cat.get("provas_7d"),
-                        "teste30_dia": dia30, "segunda_chance": sc.strftime("%d/%m") if sc else None}
+                        "teste30_dia": dia30, "segunda_chance": sc.strftime("%d/%m") if sc else None,
+                        "sc_respondeu": bool(sc and ult_lead > sc.timestamp()),
+                        "sc_produtos": cat.get("produtos_pos_sc"), "sc_provas": cat.get("provas_pos_sc"),
+                        "entregue_em": _iso(cat["entregue_em"]).strftime("%d/%m") if _iso(cat.get("entregue_em")) else None,
+                        "proximo": {"dia": prox.get("dia"), "rotulo": ROTULO_ENVIO.get(prox.get("etapa"), "Dia %s" % prox.get("dia")),
+                                    "data": str(prox.get("agendado_para") or "")[:10]} if prox else None}
         elif etapa == "TESTE PARADO" and prio < 600:
             prio, motivo = 600 + min(dias_parado or 0, 60), "Teste parado"
         if dias_parado is not None and dias_parado >= 3 and etapa not in ENCERRADO:
@@ -323,6 +331,10 @@ def visao(c, crm, usuario, agora=None):
         "parados_15": sum(1 for x in ativos if (x["dias_parado"] or 0) >= 15),
         "catalogos": sum(1 for x in itens if x["catalogo"]),
         "segunda_chance": sum(1 for x in itens if (x["catalogo"] or {}).get("segunda_chance")),
+        "sc_responderam": sum(1 for x in itens if (x["catalogo"] or {}).get("sc_respondeu")),
+        "sc_cadastraram": sum(1 for x in itens if ((x["catalogo"] or {}).get("sc_produtos") or 0) > 0),
+        "sc_provaram": sum(1 for x in itens if ((x["catalogo"] or {}).get("sc_provas") or 0) > 0),
+        "teste30": sum(1 for x in itens if (x["catalogo"] or {}).get("teste30_dia") is not None),
         "para_hoje": sum(1 for x in itens if x["prioridade"] >= PARA_HOJE),
     }
     return {"usuario": u, "resumo": resumo, "itens": itens, "etapas": list(etapas.STATUS),

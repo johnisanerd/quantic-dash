@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import time
+import urllib.error
 import urllib.request
 
 INTERVALO = 60
@@ -107,6 +108,26 @@ def passada(db_path, url, key, chave, enviados_leads):
             _rpc(url, key, chave, [], [], [x for x, _ in parte])
             for x, h in parte:
                 enviados_leads["sug:" + x["chatid"]] = h
+        # sugestões de RESPOSTA do Jev (aba Jornada) e o que a Dione fez com elas; RPC opcional (sql/pl_atend_respostas.sql)
+        try:
+            resp = [dict(r) for r in c.execute("SELECT * FROM resposta_sugestao")]
+        except sqlite3.OperationalError:
+            resp = []
+        novas = []
+        for x in resp:
+            h = hashlib.md5(json.dumps(x, sort_keys=True, default=str).encode()).hexdigest()
+            if enviados_leads.get("resp:%s" % x["id"]) != h:
+                novas.append((x, h))
+        if novas and not enviados_leads.get("_sem_rpc_respostas"):
+            try:
+                for i in range(0, len(novas), LOTE):
+                    parte = novas[i:i + LOTE]
+                    _post_rpc(url, key, "pl_atend_espelha_respostas", {"p_chave": chave, "p_itens": [x for x, _ in parte]})
+                    for x, h in parte:
+                        enviados_leads["resp:%s" % x["id"]] = h
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    enviados_leads["_sem_rpc_respostas"] = True   # SQL ainda não aplicado: para de tentar até reiniciar
         return total, len(mudou)
     finally:
         c.close()
