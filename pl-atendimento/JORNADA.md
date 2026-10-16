@@ -140,3 +140,63 @@ em paralelo. O SQLite é lido na thread da requisição.
    - mover uma etapa no Atendimento faz aparecer "X → Y · Dione" na linha do tempo.
 6. Testes: `cd pl-atendimento && python3 -m unittest test_jornada test_crm_bridge test_planos_fechados`.
    `test_grupos_catalogos`, `test_live_events` e `test_responsavel` já falhavam antes.
+
+## Visão geral (tela inicial, 16/10/2026)
+
+**Por que a página aparecia "sem dados".** Os endpoints e as RPCs estavam funcionando:
+- os nomes de env batem (`PL_CRM_URL`, `PL_CRM_KEY`, `PL_IA_KEY`);
+- `crm_jornada_loja` e `crm_jornada_catalogos_30d` respondem com a chave do serviço;
+- a jornada de 240 leads reais, montada numa cópia do painel.db feita a partir do espelho, saiu sem erro (p50 0,2 s).
+
+O problema era a tela inicial. Ela só listava catálogos com `teste_30d`, que eram zero. O resultado era um card
+vazio até a pessoa buscar um lead.
+
+**Agora a tela inicial é a visão geral** (`GET /api/jornada/visao`, `visao_geral.py`, `JornadaVisao.tsx`):
+- **Cards de destaque:**
+  - esperando resposta (cliente falou por último, igual à bolinha do Atendimento);
+  - para fazer hoje;
+  - parados 3+, 7+ e 15+ dias sem interação;
+  - segunda chance.
+- **Funil:** leads por etapa (as 11 etapas). Cada card é clicável e vira filtro.
+- **Lista "o que fazer hoje":** ordenada por prioridade, com o motivo de cada lead. Cada linha mostra etapa, dias
+  na etapa, última interação (quem, quando e trecho), responsável e sinais:
+  - 🟢 esperando resposta
+  - ⏰ parado X dias
+  - 📦 produtos
+  - 👓 provas
+  - 🎁 segunda chance
+  - 💰 proposta ou PIX pendente
+  - 🗓 teste 30d dia N
+  - 📅 retomar
+  - ✨ sugestão do Jev
+  - ✅ plano
+- **Filtros:** etapa, responsável, só esperando, só parados, só catálogos e segunda chance. Ordenação por
+  prioridade, tempo parado, tempo na etapa ou interação recente. O clique abre a jornada do lead.
+- **Prioridade**, da mais alta para a mais baixa:
+  1. cliente esperando há até 7 dias (o mais recente primeiro);
+  2. Stand-by com retomar vencido;
+  3. cobrança gerada e não paga;
+  4. proposta ou aguardando pagamento parado há 2+ dias;
+  5. teste parado;
+  6. catálogo no ar sem produto;
+  7. follow-up (3 a 7 dias sem interação);
+  8. segunda chance sem resposta;
+  9. esperando há mais de 7 dias, ou parado há mais de 7 dias (esfriando);
+  10. Novo parado.
+
+  "Para fazer hoje" conta os itens com prioridade ≥ 450: os grupos 1 a 8 e, no grupo 1, só quem espera
+  até 7 dias.
+- **Quem entra na lista:**
+  - todas as conversas do painel (sem grupos, ocultas e suporte de cliente final);
+  - os leads só do CRM a partir de Interessado (catálogo sem conversa, por exemplo).
+- **Contagem de "parados":** conta do Em conversa em diante, sem Convertido e Perdido. Novo que nunca respondeu é
+  lista fria.
+- **Visibilidade:** o Lucas vê todos; a Dione vê os dela e os sem responsável. Outro login recebe 403.
+- **Desempenho:** tudo é calculado em lote: SQLite agregado por conversa, `leads` do CRM em 3 páginas em
+  paralelo e a RPC `crm_jornada_visao`, essas duas com cache de 60 s. Na base real (1.439 itens) levou 0,5 s
+  frio e 0,1 s com cache. A resposta, de ~800 KB, vai em gzip (~10x menor).
+- **SQL a aplicar:** `sql/crm_jornada_visao.sql`. Traz, por catálogo: lead dono, produtos, provas, envios
+  automáticos (segunda chance / régua), conta e PIX pendente. Já foi conferido como SELECT no banco real: 0,36 s.
+  Sem a função, a visão geral funciona igual, só sem os sinais de catálogo, e mostra um aviso.
+- **Limitação:** "há quanto tempo na etapa" depende do `etapa_historico` (novo) ou das notas "movido para" do CRM.
+  Para leads antigos que não estão em Novo aparece "sem registro" até a próxima mudança de etapa.

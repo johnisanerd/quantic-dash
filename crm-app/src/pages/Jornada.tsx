@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import JornadaVisao from "../components/JornadaVisao";
 
 // Jornada do lead: cada passo do lead (o que fizemos com ele e o que ele fez com a gente).
 // Dados: GET /api/lead/jornada (painel) — mesma regra de visibilidade do Atendimento.
@@ -147,7 +148,7 @@ export default function JornadaPage() {
           <h1 className="text-2xl font-semibold text-bright">Jornada do lead</h1>
           <p className="mt-1 text-sm text-muted">Tudo o que aconteceu com o lead, dia a dia: o que nós fizemos e o que ele fez com a gente.</p>
         </div>
-        {(chatid || crmId) && <button onClick={() => setParams(new URLSearchParams())} className="rounded-lg border border-edge px-3 py-2 text-xs text-muted hover:text-bright">← Catálogos em teste</button>}
+        {(chatid || crmId) && <button onClick={() => setParams(new URLSearchParams())} className="rounded-lg border border-edge px-3 py-2 text-xs text-muted hover:text-bright">← Visão geral</button>}
       </header>
 
       <div className="relative">
@@ -177,7 +178,7 @@ export default function JornadaPage() {
 
       {erro && <div role="alert" className="rounded-lg border border-rose/40 px-4 py-3 text-sm text-rose">{erro}</div>}
       {carregando && <p role="status" className="text-sm text-muted">Montando a jornada…</p>}
-      {!chatid && !crmId && <Catalogos30 onAbrir={abre} />}
+      {!chatid && !crmId && <><JornadaVisao onAbrir={abre} /><Catalogos30 onAbrir={abre} /></>}
       {j && !carregando && <Detalhe j={j} filtro={filtro} setFiltro={setFiltro} abertos={abertos} setAbertos={setAbertos}
         envioAberto={envioAberto} setEnvioAberto={setEnvioAberto} />}
     </div>
@@ -395,13 +396,13 @@ function Catalogos30({ onAbrir }: { onAbrir: (r: { chatid?: string | null; crmId
   useEffect(() => {
     getJson<{ itens: Cat30[] }>("/api/jornada/catalogos30").then(d => setItens(d.itens)).catch(e => setErro(e instanceof Error ? e.message : "Falha ao carregar."));
   }, []);
+  if (!erro && (!itens || !itens.length)) return null;   // some enquanto não houver catálogo na régua
   return (
     <section className="rounded-xl border border-edge bg-raised p-4 sm:p-5">
       <h2 className="text-sm font-semibold text-bright">Catálogos na régua de 30 dias</h2>
-      <p className="mb-3 mt-0.5 text-xs text-muted">Dia atual de cada loja e a próxima mensagem automática. Busque um lead acima para ver a jornada completa.</p>
+      <p className="mb-3 mt-0.5 text-xs text-muted">Dia atual de cada loja e a próxima mensagem automática.</p>
       {erro && <p className="text-xs text-rose">{erro}</p>}
-      {!itens && !erro && <p className="text-xs text-muted">Carregando…</p>}
-      {itens && !itens.length && <p className="py-4 text-center text-xs text-muted">Nenhum catálogo na régua de 30 dias ainda.</p>}
+
       {itens && itens.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-left text-xs">

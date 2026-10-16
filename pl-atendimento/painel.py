@@ -21,7 +21,9 @@ import base64
 import grupos_catalogos
 import historico_lead
 import jornada
+import visao_geral
 import tarefas
+import gzip
 import hashlib
 from crm_bridge import CRM, ETAPAS
 from live_events import EventHub, LiveEvents
@@ -2933,6 +2935,21 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _send_gz(self, code, corpo):
+        """JSON grande (visão geral da Jornada, ~800 KB): vai comprimido quando o navegador aceita (~10x menor)."""
+        b = corpo.encode("utf-8")
+        if len(b) < 20000 or "gzip" not in (self.headers.get("Accept-Encoding") or ""):
+            return self._send(code, b)
+        z = gzip.compress(b, 5)
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(z)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(z)
+
     def log_message(self, *a):
         pass
 
@@ -3073,6 +3090,12 @@ class H(BaseHTTPRequestHandler):
                         (q.get("chatid") or [None])[0], (q.get("crm_id") or [None])[0]), ensure_ascii=False))
                 except ValueError as e:
                     return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
+            if p.path == "/api/jornada/visao":
+                try:
+                    return self._send_gz(200, json.dumps(visao_geral.visao(con(), CRM_CLIENT, self.headers.get("X-Prospeccao-User")),
+                                                      ensure_ascii=False, separators=(",", ":")))
+                except PermissionError as e:
+                    return self._send(403, json.dumps({"erro": str(e)}, ensure_ascii=False))
             if p.path == "/api/jornada/catalogos30":
                 return self._send(200, json.dumps(jornada.catalogos_30d(CRM_CLIENT, self.headers.get("X-Prospeccao-User")),
                                                   ensure_ascii=False))

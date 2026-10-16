@@ -47,6 +47,8 @@ REGUA = [(7, "montagem_7", "Montagem · dia 7"), (14, "montagem_14", "Montagem �
          (21, "vespera", "Véspera do teste · dia 21"), (22, "inicio_teste", "Início do teste grátis · dia 22"),
          (28, "ultimo_dia", "Último dia do teste · dia 28")]
 ROTULO_ENVIO = {e: r for _, e, r in REGUA}
+# "segunda chance": mensagem única pra quem teve o teste encerrado sem uso (no grupo e no privado)
+ROTULO_ENVIO.update({"segunda_chance": "Segunda chance · grupo", "segunda_chance_privado": "Segunda chance · privado"})
 
 CATEGORIAS = ("mensagens", "etapas", "catalogo", "financeiro", "notas", "responsavel", "lead")
 QUEM_ROTULO = {"nos": "Nós", "lead": "Lead", "sistema": "Sistema (automático)", "jev": "Jev"}
