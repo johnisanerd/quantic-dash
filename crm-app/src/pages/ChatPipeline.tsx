@@ -13,7 +13,7 @@ type Plan={nome:string;preco:string};
 // Plano fora da tabela (acordo especial): grava "Personalizado — <descrição>"; o servidor aceita esse prefixo.
 const CUSTOM_PLAN="Personalizado",CUSTOM_KEY="__personalizado__";
 type Sale={plano:string;valor_centavos:number};
-type Lead={venda?:Sale|null;chatid:string;nome:string;fone:string;status:string;responsavel:string|null;quando:string;ultimo_ts:number|null;ha:string;ultima:string;origem?:"crm";crmId?:string;hasConv?:boolean;grupoChatid?:string|null;grupoNome?:string|null;diasTeste?:number|null};
+type Lead={venda?:Sale|null;chatid:string;nome:string;fone:string;status:string;responsavel:string|null;quando:string;ultimo_ts:number|null;ultimo_lead_ts?:number|null;ha:string;ultima:string;origem?:"crm";crmId?:string;hasConv?:boolean;grupoChatid?:string|null;grupoNome?:string|null;diasTeste?:number|null};
 const stages=[{label:"Esperando",value:"",color:"#7c3aed"},{label:"Sem resposta",value:"_sem_resposta",color:"#8490a3"},{label:"Novo",value:"NOVO",color:"#3b82f6"},{label:"Em conversa",value:"EM CONVERSA",color:"#0ea5e9"},{label:"Interessado",value:"INTERESSADO",color:"#8b5cf6"},{label:"Aguardando dados",value:"AGUARDANDO DADOS",color:"#06b6d4"},{label:"Em teste",value:"EM TESTE",color:"#84cc16"},{label:"Teste parado",value:"TESTE PARADO",color:"#f97316"},{label:"Proposta enviada",value:"PROPOSTA ENVIADA",color:"#a855f7"},{label:"Aguardando pagamento",value:"AGUARDANDO PAGAMENTO",color:"#22c55e"},{label:"Convertido",value:"CONVERTIDO",color:"#10b981"},{label:"Stand-by",value:"STAND-BY",color:"#f59e0b"},{label:"Perdido",value:"PERDIDO",color:"#ef4444"},{label:"Removidos",value:"_ocultos",color:"#8490a3"}];
 // Colunas comerciais: passam a ler do banco (Supabase) — fonte da verdade do CRM.
 // As demais (Esperando, Sem resposta, Mensagem 1-3, Stand-by, Removidos) seguem do painel.
@@ -51,7 +51,7 @@ export default function ChatPipeline(){
    const [crmRes,catRes,convs]=await Promise.all([
      supabase.from("leads").select("id,nome_loja,telefone,whatsapp,email,status,responsavel,updated_at,teste_gratis_em"),
      supabase.from("pl_catalog_stores").select("display_name,owner_email,whatsapp,created_at"),
-     fetch("/api/conversas").then(r=>r.ok?r.json():[]).catch(()=>[]) as Promise<Array<{chatid:string;fone:string;responsavel:string|null;ultimo_ts:number|null;quando:string;ultima:string;venda:Sale|null;grupo_chatid?:string|null;grupo_nome?:string|null;sem_conversa?:boolean}>>,
+     fetch("/api/conversas").then(r=>r.ok?r.json():[]).catch(()=>[]) as Promise<Array<{chatid:string;fone:string;responsavel:string|null;ultimo_ts:number|null;ultimo_lead_ts?:number|null;quando:string;ultima:string;venda:Sale|null;grupo_chatid?:string|null;grupo_nome?:string|null;sem_conversa?:boolean}>>,
    ]);
    const crmLeads=await applyCustomLeadStatuses((crmRes.data||[]) as any[]) as Array<{id:string;nome_loja:string|null;telefone:string|null;whatsapp:string|null;status:string;responsavel:string|null;updated_at:string|null;email?:string|null;teste_gratis_em?:string|null}>;
    // Catálogo do lead (e-mail, telefone ou nome) -> dias desde a criação
@@ -81,10 +81,11 @@ export default function ChatPipeline(){
        cards.push({origem:"crm",crmId:cl.id,hasConv:!!conv,chatid:conv?conv.chatid:("55"+f+"@s.whatsapp.net"),
          nome:cl.nome_loja||"",fone:conv?conv.fone:f,status:s.value,
          responsavel:conv?(conv.responsavel??cl.responsavel):cl.responsavel,venda:(conv&&conv.venda)||vendaByFone.get(f)||vendaByFone.get(f.slice(-8))||null,
-         ultimo_ts:conv?conv.ultimo_ts:(cl.updated_at?Date.parse(cl.updated_at):null),
+         ultimo_ts:conv?conv.ultimo_ts:(cl.updated_at?Date.parse(cl.updated_at):null),ultimo_lead_ts:conv?(conv.ultimo_lead_ts??null):null,
          quando:conv?conv.quando:"",ha:"",ultima:conv?conv.ultima:"",grupoChatid:conv?.grupo_chatid??null,grupoNome:conv?.grupo_nome??null,diasTeste:["CONVERTIDO","PERDIDO"].includes(s.value)?null:diasDeTeste(cl,f)});
      }
-     cards.sort((a,b)=>(b.ultimo_ts||0)-(a.ultimo_ts||0));
+     // 16/10/2026: quem respondeu por último fica no topo (a mensagem que a gente manda não reordena)
+     cards.sort((a,b)=>((b.ultimo_lead_ts||0)-(a.ultimo_lead_ts||0))||((b.ultimo_ts||0)-(a.ultimo_ts||0)));
      result[i]=cards;
    });
    // 4. Dedup: quem está numa coluna comercial não repete nas colunas de fluxo

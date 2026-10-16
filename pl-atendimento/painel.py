@@ -766,38 +766,44 @@ def normaliza_busca(valor):
     return " ".join("".join(c for c in valor if not unicodedata.combining(c)).casefold().split())
 
 
+# Ordem das conversas (16/10/2026, pedido do Lucas): pela última mensagem DO CLIENTE.
+# Quem respondeu sobe pro topo; mensagem que a Dione manda não mexe na ordem.
+ULTIMO_DO_LEAD = ("(SELECT MAX(m.ts) FROM mensagens m WHERE m.chatid = leads.chatid"
+                  " AND m.from_me = 0 AND m.excluida = 0)")
+
+
 def fila(status=None, busca=None, responsavel=None, chatid=None, usuario=None):
     c = con()
     busca = str(busca or "").strip()
     if chatid:
-        linhas = c.execute("SELECT * FROM leads WHERE chatid=?", (chatid,)).fetchall()
+        linhas = c.execute("SELECT *, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads WHERE chatid=?", (chatid,)).fetchall()
     elif busca:
-        linhas = c.execute("SELECT * FROM leads WHERE COALESCE(oculto,0)=0"
-                           + SEM_SUPORTE + " ORDER BY ultimo_ts DESC").fetchall()
+        linhas = c.execute("SELECT *, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads WHERE COALESCE(oculto,0)=0"
+                           + SEM_SUPORTE + " ORDER BY COALESCE(ultimo_lead_ts, 0) DESC, ultimo_ts DESC").fetchall()
         termo = normaliza_busca(busca)
         digitos = re.sub(r"\D", "", busca)
         busca_telefone = bool(digitos) and not re.search(r"[^\d\s()+.\-]", busca)
         linhas = [r for r in linhas if termo in normaliza_busca(r["nome"])
                   or (busca_telefone and digitos in re.sub(r"\D", "", r["fone"] or ""))]
     elif status == "_ocultos":
-        linhas = c.execute("SELECT * FROM leads WHERE oculto=1 ORDER BY ultimo_ts DESC").fetchall()
+        linhas = c.execute("SELECT *, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads WHERE oculto=1 ORDER BY COALESCE(ultimo_lead_ts, 0) DESC, ultimo_ts DESC").fetchall()
     elif status == "_sem_resposta":
         # Quem ja esta em Teste gratis tem coluna propria: nao aparece tambem aqui.
         linhas = c.execute(
-            "SELECT * FROM leads WHERE ultimo_de='nos'"
+            "SELECT *, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads WHERE ultimo_de='nos'"
             " AND COALESCE(oculto,0)=0 AND status NOT IN (" + COM_COLUNA_SQL + ")"
-            + SEM_SUPORTE + " ORDER BY ultimo_ts DESC").fetchall()
+            + SEM_SUPORTE + " ORDER BY COALESCE(ultimo_lead_ts, 0) DESC, ultimo_ts DESC").fetchall()
     elif status:
-        linhas = c.execute("SELECT * FROM leads WHERE status=? AND COALESCE(oculto,0)=0"
+        linhas = c.execute("SELECT *, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads WHERE status=? AND COALESCE(oculto,0)=0"
                            + SEM_SUPORTE +
-                           " ORDER BY ultimo_ts DESC", (status,)).fetchall()
+                           " ORDER BY COALESCE(ultimo_lead_ts, 0) DESC, ultimo_ts DESC", (status,)).fetchall()
     else:
         # "Esperando": quem respondeu por ultimo e ainda nao tem etapa fechada.
         # Quem esta em Teste gratis tem coluna propria e nao deve aparecer aqui tambem.
         linhas = c.execute(
-            "SELECT * FROM leads WHERE ultimo_de='lead' AND COALESCE(oculto,0)=0"
+            "SELECT *, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads WHERE ultimo_de='lead' AND COALESCE(oculto,0)=0"
             " AND status NOT IN (" + COM_COLUNA_SQL + ")"
-            + SEM_SUPORTE + " ORDER BY ultimo_ts DESC").fetchall()
+            + SEM_SUPORTE + " ORDER BY COALESCE(ultimo_lead_ts, 0) DESC, ultimo_ts DESC").fetchall()
     if responsavel:
         linhas = [r for r in linhas if (not r["responsavel"] if responsavel == "_sem_responsavel"
                                        else r["responsavel"] == responsavel)]
@@ -809,7 +815,7 @@ def fila(status=None, busca=None, responsavel=None, chatid=None, usuario=None):
         dt = quando(r["ultimo_ts"])
         out.append({"chatid": r["chatid"], "fone": r["fone"], "nome": r["nome"],
                     "status": r["status"], "responsavel": r["responsavel"], "venda": vendas.get(r["chatid"]),
-                    "ultimo_ts": r["ultimo_ts"], "quando": dt.strftime("%d/%m %H:%M"),
+                    "ultimo_ts": r["ultimo_ts"], "ultimo_lead_ts": (r["ultimo_lead_ts"] if "ultimo_lead_ts" in r.keys() else None), "quando": dt.strftime("%d/%m %H:%M"),
                     "ha": humano(dt),
                     "ultima": (u["texto"] if u and u["texto"]
                                else rotulo(u["tipo"], u["segundos"]) if u else "")})
@@ -842,7 +848,7 @@ def conversas_index():
     vendas = {r["chatid"]: dict(r) for r in c.execute("SELECT * FROM planos_fechados")}
     grupos = {r["lead_chatid"]: (r["chatid"], r["nome"]) for r in c.execute("SELECT chatid, lead_chatid, nome FROM grupos_catalogos")}
     linhas = c.execute(
-        "SELECT chatid, fone, responsavel, ultimo_ts, ultimo_de FROM leads"
+        "SELECT chatid, fone, responsavel, ultimo_ts, ultimo_de, " + ULTIMO_DO_LEAD + " AS ultimo_lead_ts FROM leads"
         " WHERE COALESCE(oculto,0)=0 AND chatid NOT LIKE '%@g.us'").fetchall()
     out = []
     for r in linhas:
@@ -850,7 +856,7 @@ def conversas_index():
                       " ORDER BY ts DESC LIMIT 1", (r["chatid"],)).fetchone()
         dt = quando(r["ultimo_ts"])
         out.append({"chatid": r["chatid"], "fone": r["fone"], "responsavel": r["responsavel"],
-                    "ultimo_ts": r["ultimo_ts"], "ultimo_de": r["ultimo_de"],
+                    "ultimo_ts": r["ultimo_ts"], "ultimo_lead_ts": r["ultimo_lead_ts"], "ultimo_de": r["ultimo_de"],
                     "quando": dt.strftime("%d/%m %H:%M") if r["ultimo_ts"] else "",
                     "ultima": (u["texto"] if u and u["texto"]
                                else rotulo(u["tipo"], u["segundos"]) if u else ""),
@@ -1578,6 +1584,7 @@ display:flex;flex-direction:column;gap:7px;pointer-events:none}
 border:1px solid var(--linha);border-left:3px solid var(--roxo);border-radius:10px;
 box-shadow:0 8px 28px #0004;pointer-events:auto;animation:notifica-in .18s ease-out}
 .notificacao:hover{background:var(--hover)}
+.ativar-avisos{position:fixed;right:14px;bottom:14px;z-index:41;padding:9px 13px;border-radius:10px;border:1px solid var(--borda,#ddd);background:var(--card);color:var(--txt);font:600 12.5px inherit;cursor:pointer;box-shadow:0 6px 20px #0003}
 .notificacao-titulo{display:block;font-size:12px;font-weight:700;line-height:1.3}
 .notificacao-msg{display:-webkit-box;margin-top:2px;color:var(--previa);font-size:11.5px;line-height:1.35;
 overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere}
@@ -1702,6 +1709,7 @@ header>.filtro-responsavel select{width:135px;flex:0 0 auto}
 @media(max-width:600px){header>.filtro-responsavel{font-size:11px;gap:4px}header>.filtro-responsavel select{width:105px}}
 </style></head><body>
 <div class="notificacoes" id="notificacoes" aria-live="polite"></div>
+<button type="button" id="ativarAvisos" class="ativar-avisos" hidden onclick="pedePermissaoAvisos()">🔔 Ativar avisos de resposta no computador</button>
 <header>
   <div class="filtros" id="filtros"></div>
     <label class="filtro-responsavel" for="filtroResponsavel"><span data-icon="user"></span>Responsável
@@ -1860,6 +1868,49 @@ async function buscaNotificacoes(mostrar=true){
     if(avisosVistos.size>300) avisosVistos=new Set(mensagens.map(m=>m.id));
   }catch(e){}
 }
+// Avisos de resposta (16/10/2026): aviso na tela até clicar + notificação do sistema
+// (aparece com a aba minimizada ou em outra aba) + som + contador no título da aba.
+let naoLidasAviso=0;
+const tituloBase=document.title;
+function topoDoc(){ try{ return window.top.document; }catch(e){ return document; } }
+const tituloTopoBase=topoDoc().title;
+function atualizaTituloAviso(){
+  const pre=naoLidasAviso?'('+naoLidasAviso+') ':'';
+  document.title=pre+tituloBase;
+  try{ const t=topoDoc(); if(t!==document) t.title=pre+tituloTopoBase; }catch(e){}
+}
+function zeraAvisos(){ if(!naoLidasAviso) return; naoLidasAviso=0; atualizaTituloAviso(); }
+window.addEventListener('focus',zeraAvisos);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) zeraAvisos(); });
+try{ window.top.addEventListener('focus',zeraAvisos); }catch(e){}
+let somAviso=null;
+function tocaAviso(){
+  try{
+    somAviso=somAviso||new (window.AudioContext||window.webkitAudioContext)();
+    const ctx=somAviso; if(ctx.state==='suspended') ctx.resume();
+    [0,0.18].forEach((t,k)=>{ const o=ctx.createOscillator(), g=ctx.createGain();
+      o.type='sine'; o.frequency.value=k?1046:784;
+      g.gain.setValueAtTime(0.0001,ctx.currentTime+t); g.gain.exponentialRampToValueAtTime(0.25,ctx.currentTime+t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+t+0.16);
+      o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime+t); o.stop(ctx.currentTime+t+0.17); });
+  }catch(e){}
+}
+function avisoForaDaTela(){ let foco=document.hasFocus(); try{ foco=foco||window.top.document.hasFocus(); }catch(e){} return document.hidden||!foco; }
+function notificaSistema(m){
+  if(!('Notification' in window)||Notification.permission!=='granted') return;
+  try{
+    const n=new Notification((m.nome||'Cliente')+' respondeu',{body:m.texto||'Nova mensagem',tag:'pl-'+m.chatid,renotify:true,icon:'/favicon.ico'});
+    n.onclick=()=>{ try{ window.top.focus(); }catch(e){} window.focus(); abreConversaNotificada(m.chatid,null); n.close(); };
+  }catch(e){}
+}
+function pedePermissaoAvisos(){
+  if(!('Notification' in window)) return;
+  Notification.requestPermission().then(()=>mostraBotaoAvisos());
+}
+function mostraBotaoAvisos(){
+  const b=document.getElementById('ativarAvisos'); if(!b) return;
+  b.hidden=!('Notification' in window)||Notification.permission!=='default';
+}
 function mostraNotificacao(m){
   const caixa=document.getElementById('notificacoes'), aviso=document.createElement('button');
   aviso.type='button'; aviso.className='notificacao';
@@ -1868,14 +1919,17 @@ function mostraNotificacao(m){
   texto.className='notificacao-msg'; texto.textContent=m.texto||'Nova mensagem';
   aviso.append(titulo,texto); aviso.onclick=()=>abreConversaNotificada(m.chatid,aviso);
   caixa.appendChild(aviso);
-  while(caixa.children.length>3) caixa.firstElementChild.remove();
-  setTimeout(()=>aviso.remove(),5500);
+  while(caixa.children.length>4) caixa.firstElementChild.remove();
+  // fica na tela até a Dione clicar (some sozinho só depois de 2 min)
+  setTimeout(()=>aviso.remove(),120000);
+  tocaAviso();
+  if(avisoForaDaTela()){ naoLidasAviso++; atualizaTituloAviso(); notificaSistema(m); }
 }
 async function abreConversaNotificada(chatid,aviso){
   let i=pend.findIndex(p=>p.chatid===chatid);
   if(i<0){ filtro=''; filtroResponsavel=''; document.getElementById('filtroResponsavel').value='';
     limpaBusca(false); await filtros(); await carrega(); i=pend.findIndex(p=>p.chatid===chatid); }
-  if(i>=0) abrir(i); aviso.remove();
+  if(i>=0) abrir(i); if(aviso) aviso.remove();
 }
 
 let conversaDestino=new URLSearchParams(location.search).get("chatid");
@@ -2664,7 +2718,7 @@ async function atualiza(){
     '<option value="_sem_responsavel">Sem responsável</option>';
   await filtros(); await carrega();
   if(conversaDestino){const i=pend.findIndex(p=>p.chatid===conversaDestino);if(i>=0)await abrir(i);else document.getElementById("painel").textContent="Conversa não encontrada.";}
-  await buscaNotificacoes(false); conectaEventos(); })();
+  await buscaNotificacoes(false); conectaEventos(); mostraBotaoAvisos(); })();
 
 let eventosTelaAtivos=false, atualizacaoEvento=null;
 async function atualizaPorEvento(){
