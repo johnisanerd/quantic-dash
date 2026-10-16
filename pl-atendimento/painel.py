@@ -337,6 +337,7 @@ def cria_banco():
       id TEXT PRIMARY KEY, rotulo TEXT NOT NULL, texto TEXT NOT NULL, ordem INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS mensagens_especiais (chave TEXT PRIMARY KEY, texto TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS edicoes_recentes (chatid TEXT, texto TEXT, ts INTEGER);
+    CREATE TABLE IF NOT EXISTS conversas_vistas (chatid TEXT, usuario TEXT, ts INTEGER, PRIMARY KEY (chatid, usuario));
     CREATE INDEX IF NOT EXISTS ix_edicoes_recentes ON edicoes_recentes(chatid, ts);
     """)
     c.execute("CREATE TABLE IF NOT EXISTS metricas_migracoes (nome TEXT PRIMARY KEY)")
@@ -810,6 +811,7 @@ def fila(status=None, busca=None, responsavel=None, chatid=None, usuario=None):
         linhas = [r for r in linhas if (not r["responsavel"] if responsavel == "_sem_responsavel"
                                        else r["responsavel"] == responsavel)]
     vendas = {r["chatid"]: dict(r) for r in c.execute("SELECT * FROM planos_fechados")}
+    vistas = _vistas(c, usuario)
     out = []
     for r in linhas:
         u = c.execute("SELECT tipo,texto,segundos FROM mensagens WHERE chatid=? AND excluida=0"
@@ -817,7 +819,7 @@ def fila(status=None, busca=None, responsavel=None, chatid=None, usuario=None):
         dt = quando(r["ultimo_ts"])
         out.append({"chatid": r["chatid"], "fone": r["fone"], "nome": r["nome"],
                     "status": r["status"], "responsavel": r["responsavel"], "venda": vendas.get(r["chatid"]),
-                    "ultimo_de": r["ultimo_de"], "ultimo_ts": r["ultimo_ts"], "ultimo_lead_ts": (r["ultimo_lead_ts"] if "ultimo_lead_ts" in r.keys() else None), "quando": dt.strftime("%d/%m %H:%M"),
+                    "nao_visto": bool(r["ultimo_de"] == "lead" and _ms(r["ultimo_lead_ts"] if "ultimo_lead_ts" in r.keys() else r["ultimo_ts"]) > _ms(vistas.get(r["chatid"]))), "ultimo_de": r["ultimo_de"], "ultimo_ts": r["ultimo_ts"], "ultimo_lead_ts": (r["ultimo_lead_ts"] if "ultimo_lead_ts" in r.keys() else None), "quando": dt.strftime("%d/%m %H:%M"),
                     "ha": humano(dt),
                     "ultima": (u["texto"] if u and u["texto"]
                                else rotulo(u["tipo"], u["segundos"]) if u else "")})
@@ -1074,7 +1076,7 @@ def recebidas_recentes(limite=50):
             for r in linhas]
 
 
-def contagem():
+def contagem(usuario=None):
     c = con()
     d = {r["status"]: r["n"] for r in
          c.execute("SELECT status, COUNT(*) n FROM leads WHERE COALESCE(oculto,0)=0"
@@ -1091,11 +1093,14 @@ def contagem():
     # Bolinhas de alerta (16/10/2026, pedido da Dione): por aba, quantas conversas têm a última
     # mensagem do CLIENTE (ninguém respondeu ainda). Some quando a gente responde.
     pend, pend_resp = {}, {}
-    for r in c.execute("SELECT COALESCE(status,'NOVO') etapa, COALESCE(NULLIF(TRIM(responsavel),''),'') resp, COUNT(*) n"
-                       " FROM leads WHERE ultimo_de='lead' AND COALESCE(oculto,0)=0" + SEM_SUPORTE + " GROUP BY 1,2"):
-        pend[r["etapa"]] = pend.get(r["etapa"], 0) + r["n"]
-        pend_resp.setdefault(r["resp"], {})[r["etapa"]] = r["n"]
-    pend["_esperando"] = d["_esperando"]
+    vistas = _vistas(c, usuario)
+    for r in c.execute("SELECT chatid, COALESCE(status,'NOVO') etapa, COALESCE(NULLIF(TRIM(responsavel),''),'') resp, "
+                       + ULTIMO_DO_LEAD + " lts, ultimo_ts FROM leads WHERE ultimo_de='lead' AND COALESCE(oculto,0)=0" + SEM_SUPORTE):
+        if _ms(r["lts"] or r["ultimo_ts"]) <= _ms(vistas.get(r["chatid"])):
+            continue    # já abriu depois da última mensagem do cliente
+        pend[r["etapa"]] = pend.get(r["etapa"], 0) + 1
+        pend_resp.setdefault(r["resp"], {})[r["etapa"]] = pend_resp.get(r["resp"], {}).get(r["etapa"], 0) + 1
+    pend["_esperando"] = sum(n for e, n in pend.items() if e not in ("CONVERTIDO", "PERDIDO"))
     d["_pendentes"], d["_pendentes_resp"] = pend, pend_resp
     por_responsavel = {}
     sem_resposta_responsavel = {}
@@ -1112,6 +1117,27 @@ def contagem():
                            "sem_resposta": sem_resposta_responsavel.get(n, 0),
                            "etapas": {**dict.fromkeys(STATUS, 0), **por_responsavel.get(n, {})}} for n in nomes]
     return d
+
+
+def marca_vista(chatid, usuario):
+    """Bolinha some quando a pessoa ABRE a conversa (16/10/2026, pedido da Dione): guarda o momento por login."""
+    if not chatid:
+        return
+    c = con()
+    c.execute("INSERT INTO conversas_vistas(chatid, usuario, ts) VALUES(?,?,?)"
+              " ON CONFLICT(chatid, usuario) DO UPDATE SET ts=excluded.ts",
+              (chatid, (usuario or "").strip().lower(), int(time.time() * 1000)))
+    c.commit()
+
+
+def _vistas(c, usuario):
+    return {r["chatid"]: r["ts"] for r in c.execute(
+        "SELECT chatid, ts FROM conversas_vistas WHERE usuario=?", ((usuario or "").strip().lower(),))}
+
+
+def _ms(ts):
+    ts = int(ts or 0)
+    return ts * 1000 if 0 < ts < 100_000_000_000 else ts
 
 
 def conversa(chatid, usuario=None):
@@ -1968,7 +1994,7 @@ async function carrega(){
       onchange="marca('${esc(p.chatid)}',this.checked)"><span class="avatar">${icone('user')}</span><div class="item-body">
       <div class="top"><span class="nome">${esc(p.nome||p.fone)}</span>
       <span class="h">${esc(p.ha)}</span></div>
-      <span class="responsavel-tag" data-responsavel="${esc(p.responsavel||'')}">${tagResponsavel(p.responsavel)}</span>${p.ultimo_de==='lead'&&!p.grupo?'<i class="ponto-resposta" title="Cliente mandou mensagem e ainda não respondemos" aria-label="Esperando sua resposta"></i>':''}
+      <span class="responsavel-tag" data-responsavel="${esc(p.responsavel||'')}">${tagResponsavel(p.responsavel)}</span>${(p.nao_visto??p.ultimo_de==='lead')&&!p.grupo?'<i class="ponto-resposta" title="Cliente mandou mensagem e ainda não respondemos" aria-label="Esperando sua resposta"></i>':''}
       <div class="msg">${esc(p.ultima)}</div>
       <div style="margin-top:6px;display:flex;gap:5px">
         ${p.grupo?'<span class="pill">Grupo do catálogo</span>':''}<span class="pill ${cls(p.status)}">${esc(p.status)}</span>
@@ -2274,6 +2300,7 @@ async function abrirLead(lead){
   descarta();
   editandoMensagem=null;
   sel=pend.findIndex(x=>x.chatid===p.chatid); selId=p.chatid; enviados=[]; ultimasLinhas=[];
+  { const it=document.querySelectorAll('.item')[sel]; const pt=it&&it.querySelector('.ponto-resposta'); if(pt) pt.remove(); if(pend[sel]) pend[sel].nao_visto=false; setTimeout(()=>{try{filtros();}catch(e){}},700); }
   document.querySelectorAll('.item').forEach((e,j)=>e.classList.toggle('sel',j===sel));
   const P=document.getElementById('painel');
   P.innerHTML='<div class="vazio"><span class="spin"></span> abrindo…</div>';
@@ -3002,7 +3029,7 @@ class H(BaseHTTPRequestHandler):
             if p.path == "/api/sync":
                 return self._send(200, json.dumps({**SYNC, "crm": CRM_CLIENT.sync_status, "events": dict(LIVE_EVENTS.status)}, ensure_ascii=False))
             if p.path == "/api/contagem":
-                return self._send(200, json.dumps(contagem(), ensure_ascii=False))
+                return self._send(200, json.dumps(contagem(self.headers.get('X-Prospeccao-User')), ensure_ascii=False))
             if p.path in ("/api/assistente/conversas", "/api/assistente/conversa"):
                 # Só o Lucas lê o histórico da equipe.
                 if (self.headers.get("X-Prospeccao-User") or "").strip().lower() != "lucas":
@@ -3055,6 +3082,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(
                     recebidas_recentes((q.get("limite") or [50])[0]), ensure_ascii=False))
             if p.path == "/api/conversa":
+                marca_vista(q["chatid"][0], self.headers.get('X-Prospeccao-User'))
                 return self._send(200, json.dumps(conversa(q["chatid"][0], self.headers.get('X-Prospeccao-User')), ensure_ascii=False))
             if p.path == "/api/sugestao":
                 d = conversa(q["chatid"][0])
