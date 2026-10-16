@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { applyCustomLeadStatus, persistLeadStatus } from "../lib/lead-status";
 import type { Lead, Interacao, LeadStatus } from "../types";
@@ -101,6 +101,13 @@ export default function LeadDetalhe() {
 
       {/* Actions */}
       <div className="flex gap-2 mb-8 stagger-in" style={{ animationDelay: "50ms" }}>
+        <Link
+          to={`/jornada?crm_id=${lead.id}`}
+          className="flex items-center gap-2 bg-violet text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition-all"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="3.5" cy="3.5" r="1.75" /><circle cx="12.5" cy="12.5" r="1.75" /><path d="M5.25 3.5H10a2.5 2.5 0 0 1 0 5H6a2.5 2.5 0 0 0 0 5h4.75" /></svg>
+          Jornada
+        </Link>
         <a
           href={`https://instagram.com/${lead.instagram}`}
           target="_blank"

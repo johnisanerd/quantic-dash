@@ -196,7 +196,7 @@ const PROSPECCAO_SESSION_SECRET = process.env.PROSPECCAO_SESSION_SECRET || crypt
 // tentativas de login vira um contador único pra TODO mundo (um trava o outro).
 app.set('trust proxy', 1);
 const loginAttempts = new Map();
-const PROSPECCAO_API = /^\/api\/(recebidas|fila|conversas|comissoes(?:\/marcar)?|tarefas(?:\/(?:salvar|excluir))?|grupos\/vincular|disparo|envio|contagem|metas\/(?:conversas|config|responsaveis)|midia|conversa|crm(?:\/.*)?|ocultar|status|responsavel|lead\/(?:excluir|historico)|enviar|mensagem\/(?:editar|excluir)|audio|combo|combo_status|catalogo(?:\/video)?|gravado|atualizar|prontos|mensagens(?:\/.*)?|encaminhar|sync|sugestao|sugestao_etapa|assistente(?:\/conversas?)?|events)(?:\?|$)/;
+const PROSPECCAO_API = /^\/api\/(recebidas|fila|conversas|comissoes(?:\/marcar)?|tarefas(?:\/(?:salvar|excluir))?|grupos\/vincular|disparo|envio|contagem|metas\/(?:conversas|config|responsaveis)|midia|conversa|crm(?:\/.*)?|ocultar|status|responsavel|lead\/(?:excluir|historico|jornada)|jornada\/catalogos30|enviar|mensagem\/(?:editar|excluir)|audio|combo|combo_status|catalogo(?:\/video)?|gravado|atualizar|prontos|mensagens(?:\/.*)?|encaminhar|sync|sugestao|sugestao_etapa|assistente(?:\/conversas?)?|events)(?:\?|$)/;
 
 function origemProspeccaoValida(req) {
     const origem = req.headers.origin;

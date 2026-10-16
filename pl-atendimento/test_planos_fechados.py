@@ -63,6 +63,6 @@ class PlanoFechadoTest(BuscaTest):
     def test_dados_movem_etapa_nova_e_rejeitam_etapa_antiga(self):
         with patch.object(painel.CRM_CLIENT,"change",return_value={"id":"crm-a"}) as change, patch.object(painel,"dados_pipeline",return_value={}):
             painel.move_pipeline_dados("a","EM CONVERSA")
-            change.assert_called_once_with("a","respondeu")
+            change.assert_called_once_with("a","respondeu",origem="manual",por=None)
             with self.assertRaises(ValueError):painel.move_pipeline_dados("a","novo_tiktok")
             change.assert_called_once()

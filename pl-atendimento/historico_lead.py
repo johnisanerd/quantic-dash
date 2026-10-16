@@ -73,6 +73,11 @@ def _catalogo(crm, lead_crm, fone, grupo_nome, nomes):
         cats = crm.request("pl_catalog_stores", {"select": "id,slug,display_name,owner_email,whatsapp,created_at"}) or []
     except Exception:
         return None
+    return casa_catalogo(cats, lead_crm, fone, grupo_nome, nomes)
+
+
+def casa_catalogo(cats, lead_crm, fone, grupo_nome, nomes):
+    """Mesmo critério de _catalogo, sobre uma lista de catálogos já carregada."""
     email = ((lead_crm or {}).get("email") or "").strip().lower()
     if email:
         c = next((c for c in cats if (c.get("owner_email") or "").strip().lower() == email), None)

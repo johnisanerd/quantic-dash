@@ -12,6 +12,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 import etapas
+import jornada
 
 # Etapas oferecidas no painel: só o funil novo (slugs antigos o banco converte sozinho).
 ETAPAS = {slug: etapas.ROTULO_CRM[slug] for _, slug in etapas.FUNIL}
@@ -66,6 +67,7 @@ class CRM:
     def setup(self):
         c = self.connect()
         c.execute('CREATE TABLE IF NOT EXISTS crm_links (chatid TEXT PRIMARY KEY, lead_id TEXT NOT NULL)')
+        jornada.init(c)
         c.commit()
 
     def request(self, table, query=None, method='GET', body=None, prefer=None):
@@ -106,11 +108,15 @@ class CRM:
                              'select': 'id,conteudo,created_at', 'order': 'created_at.desc', 'limit': 20}) if lead else []
         return {'lead': lead, 'etapas': ETAPAS, 'notas': notes}
 
-    def reflect_local(self, chatid, lead):
-        """Os filtros locais acompanham a etapa confirmada, inclusive encerramentos."""
+    def reflect_local(self, chatid, lead, origem='crm', por=None):
+        """Os filtros locais acompanham a etapa confirmada, inclusive encerramentos.
+        Toda troca de etapa vista aqui vai pro etapa_historico (aba Jornada); origem 'crm' = mudou fora do painel."""
         status = etapas.local_do_slug(lead['status'])
         c = self.connect()
+        antes = c.execute('SELECT status FROM leads WHERE chatid=?', (chatid,)).fetchone()
         c.execute('UPDATE leads SET status=? WHERE chatid=?', (status, chatid))
+        if antes is not None and (antes[0] or '') != status:
+            jornada.registra_etapa(c, chatid, antes[0], status, origem, por)
         c.commit()
         return lead
 
@@ -182,7 +188,7 @@ class CRM:
             c.commit()
             return self.reflect_local(chatid, lead)
 
-    def change(self, chatid, status):
+    def change(self, chatid, status, origem='manual', por=None):
         if status not in ETAPAS:
             raise ValueError('Etapa inválida.')
         with self.chat_lock(chatid):
@@ -199,7 +205,7 @@ class CRM:
             saved = self.remote_lead(lead_id)
             if saved['status'] != status:
                 raise ValueError('A alteração não foi confirmada pelo CRM. Atualize e tente novamente.')
-            return self.reflect_local(chatid, saved)
+            return self.reflect_local(chatid, saved, origem, por)
 
     def add_note(self, chatid, content):
         text = str(content or '').strip()
@@ -247,7 +253,10 @@ class CRM:
             for row in self.request('leads', {'select': 'id,status', 'id': 'in.(' + ','.join(ids[i:i + 150]) + ')'}):
                 novo = etapas.local_do_slug(row['status'])
                 for chatid in por_lead.get(row['id'], []):
-                    c.execute('UPDATE leads SET status=? WHERE chatid=? AND COALESCE(status,\'\')<>?', (novo, chatid, novo))
+                    antes = c.execute('SELECT status FROM leads WHERE chatid=?', (chatid,)).fetchone()
+                    if antes is not None and (antes[0] or '') != novo:
+                        c.execute('UPDATE leads SET status=? WHERE chatid=?', (novo, chatid))
+                        jornada.registra_etapa(c, chatid, antes[0], novo, 'crm')
         c.commit()
 
     def loop(self):

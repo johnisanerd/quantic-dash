@@ -20,6 +20,7 @@ import sugestao_etapa
 import base64
 import grupos_catalogos
 import historico_lead
+import jornada
 import tarefas
 import hashlib
 from crm_bridge import CRM, ETAPAS
@@ -304,6 +305,7 @@ def cria_banco():
     grupos_catalogos.initialize(c)
     sugestao_etapa.init(c)
     tarefas.initialize(c)
+    jornada.init(c)
     c.executescript("""
     CREATE TABLE IF NOT EXISTS mensagens (
       messageid TEXT PRIMARY KEY, chatid TEXT, ts INTEGER, from_me INTEGER,
@@ -907,10 +909,11 @@ def dados_pipeline(chatid):
 MOTIVOS_PERDA = ("caro", "sem interesse", "já tem solução", "sem loja ou site", "número errado", "outro")
 
 
-def move_pipeline_dados(chatid, status, retomar_dias=None, motivo=None):
+def move_pipeline_dados(chatid, status, retomar_dias=None, motivo=None, origem="manual", por=None):
+    """origem/por vão pro etapa_historico (aba Jornada): manual | jev | jev_sugestao."""
     if status not in PIPELINE_REMOTE_STATUS:
         raise ValueError("Selecione uma etapa do Pipeline Atendimento.")
-    CRM_CLIENT.change(chatid, PIPELINE_REMOTE_STATUS[status])
+    CRM_CLIENT.change(chatid, PIPELINE_REMOTE_STATUS[status], origem=origem, por=por)
     # funil out/2026: Stand-by guarda quando retomar; Perdido guarda o motivo
     extra = {}
     if status == "STAND-BY":
@@ -962,14 +965,14 @@ def plano_valido(plano):
     return None
 
 
-def salva_plano_fechado(chatid, plano, valor_centavos):
+def salva_plano_fechado(chatid, plano, valor_centavos, por=None):
     plano = plano_valido(plano)
     if not plano:
         raise ValueError("Selecione um plano válido.")
     if type(valor_centavos) is not int or not 1 <= valor_centavos <= 100000000:
         raise ValueError("Informe um valor de mensalidade válido.")
     with CRM_CLIENT.chat_lock(chatid):
-        lead = CRM_CLIENT.change(chatid, "fechou")
+        lead = CRM_CLIENT.change(chatid, "fechou", origem="manual", por=por)
         agora = datetime.now(BRT).isoformat()
         c = con()
         c.execute("INSERT INTO planos_fechados(chatid,lead_id,plano,valor_centavos,fechado_em,atualizado_em) "
@@ -3018,6 +3021,16 @@ class H(BaseHTTPRequestHandler):
                         (q.get("chatid") or [None])[0], (q.get("crm_id") or [None])[0]), ensure_ascii=False))
                 except ValueError as e:
                     return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
+            if p.path == "/api/lead/jornada":
+                try:
+                    return self._send(200, json.dumps(jornada.jornada(
+                        con(), CRM_CLIENT, self.headers.get("X-Prospeccao-User"),
+                        (q.get("chatid") or [None])[0], (q.get("crm_id") or [None])[0]), ensure_ascii=False))
+                except ValueError as e:
+                    return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
+            if p.path == "/api/jornada/catalogos30":
+                return self._send(200, json.dumps(jornada.catalogos_30d(CRM_CLIENT, self.headers.get("X-Prospeccao-User")),
+                                                  ensure_ascii=False))
             if p.path == "/api/conversas":
                 return self._send(200, json.dumps(conversas_index(), ensure_ascii=False))
             if p.path == "/api/recebidas":
@@ -3124,7 +3137,8 @@ class H(BaseHTTPRequestHandler):
                         note = CRM_CLIENT.add_note(d["chatid"], d.get("texto"))
                         return self._send(200, json.dumps({"ok": True, "note": note}, ensure_ascii=False))
                     if self.path.endswith("/etapa"):
-                        data = move_pipeline_dados(d["chatid"], d["status"], d.get("retomar_dias"), d.get("motivo"))
+                        data = move_pipeline_dados(d["chatid"], d["status"], d.get("retomar_dias"), d.get("motivo"),
+                                                   por=nome_responsavel(self.headers.get("X-Prospeccao-User")))
                     else:
                         CRM_CLIENT.ensure(d["chatid"], create=True)
                         data = dados_pipeline(d["chatid"])
@@ -3144,7 +3158,7 @@ class H(BaseHTTPRequestHandler):
                     if not sug:
                         raise ValueError("Essa sugestão não está mais disponível.")
                     if d.get("acao") == "aplicar":
-                        move_pipeline_dados(d["chatid"], sug["etapa"])
+                        move_pipeline_dados(d["chatid"], sug["etapa"], origem="jev_sugestao", por=nome_responsavel(usuario))
                         sugestao_etapa.decide(c, d["chatid"], "aplicada", usuario)
                     else:
                         sugestao_etapa.decide(c, d["chatid"], "ignorada", usuario)
@@ -3160,12 +3174,14 @@ class H(BaseHTTPRequestHandler):
                 mapping = etapas.PARA_CRM
                 if d["status"] == "CONVERTIDO" and "plano" in d:
                     try:
-                        return self._send(200, json.dumps(salva_plano_fechado(d["chatid"], d["plano"], d.get("valor_centavos"))))
+                        return self._send(200, json.dumps(salva_plano_fechado(d["chatid"], d["plano"], d.get("valor_centavos"),
+                                                                              nome_responsavel(self.headers.get("X-Prospeccao-User")))))
                     except (ValueError, RuntimeError) as e:
                         return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
                 if d["status"] not in mapping:
                     return self._send(400, json.dumps({"erro": "Etapa inválida."}, ensure_ascii=False))
-                move_pipeline_dados(d["chatid"], d["status"], d.get("retomar_dias"), d.get("motivo"))
+                move_pipeline_dados(d["chatid"], d["status"], d.get("retomar_dias"), d.get("motivo"),
+                                    por=nome_responsavel(self.headers.get("X-Prospeccao-User")))
                 return self._send(200, json.dumps({"ok": True}))
             if self.path == "/api/grupos/vincular":
                 origin = self.headers.get("Origin")
@@ -3337,7 +3353,8 @@ if __name__ == "__main__":
     # espelho do painel.db no Supabase (histórico acessível fora do container)
     threading.Thread(target=espelho.loop, args=(DB, CRM_CLIENT.url, CRM_CLIENT.key), daemon=True).start()
     # Jev organiza o funil: move sozinho quando é seguro (>= 0,9), senão sugere na conversa
-    threading.Thread(target=sugestao_etapa.loop, args=(DB, transcreve_msg, avisa_mensagem_nova, move_pipeline_dados), daemon=True).start()
+    threading.Thread(target=sugestao_etapa.loop, args=(DB, transcreve_msg, avisa_mensagem_nova,
+                     lambda chatid, etapa: move_pipeline_dados(chatid, etapa, origem="jev", por="Jev")), daemon=True).start()
     threading.Thread(target=CRM_CLIENT.loop, daemon=True).start()
     print("\nPainel de Atendimento em  http://localhost:%d" % PORTA)
     print("Ctrl+C para parar.\n")

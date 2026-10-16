@@ -13,6 +13,8 @@ import TestesGratis from "./pages/TestesGratis";
 import Comissoes from "./pages/Comissoes";
 import Tarefas from "./pages/Tarefas";
 import Assistente from "./pages/Assistente";
+import Jornada from "./pages/Jornada";
+import LeadDetalhe from "./pages/LeadDetalhe";
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
           <Route path="/pipeline/anterior" element={<Pipeline />} />
           <Route path="/testes-gratis" element={<TestesGratis />} />
           <Route path="/leads" element={<Leads />} />
+          <Route path="/leads/:id" element={<LeadDetalhe />} />
+          <Route path="/jornada" element={<Jornada />} />
           <Route path="/objecoes" element={<Objecoes />} />
           <Route path="/trafego-pago" element={<TrafegoPago />} />
           <Route path="/metas" element={<Metas />} />

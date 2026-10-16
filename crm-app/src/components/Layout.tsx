@@ -39,6 +39,17 @@ const NAV_ITEMS = [
     ),
   },
   {
+    to: "/jornada",
+    label: "Jornada do lead",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="3.5" cy="3.5" r="1.75" />
+        <circle cx="12.5" cy="12.5" r="1.75" />
+        <path d="M5.25 3.5H10a2.5 2.5 0 0 1 0 5H6a2.5 2.5 0 0 0 0 5h4.75" />
+      </svg>
+    ),
+  },
+  {
     to: "/assistente",
     label: "Assistente IA",
     icon: (
