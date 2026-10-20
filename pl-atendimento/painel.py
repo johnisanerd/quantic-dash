@@ -1102,6 +1102,8 @@ def contagem(usuario=None):
                        + ULTIMO_DO_LEAD + " lts, ultimo_ts FROM leads WHERE ultimo_de='lead' AND COALESCE(oculto,0)=0" + SEM_SUPORTE):
         if _ms(r["lts"] or r["ultimo_ts"]) <= _ms(vistas.get(r["chatid"])):
             continue    # já abriu depois da última mensagem do cliente
+        if not _cliente_falou_por_ultimo(c, r["chatid"]):
+            continue    # 20/10/2026: só resposta automática / aviso do WhatsApp / reação depois da nossa msg
         pend[r["etapa"]] = pend.get(r["etapa"], 0) + 1
         pend_resp.setdefault(r["resp"], {})[r["etapa"]] = pend_resp.get(r["resp"], {}).get(r["etapa"], 0) + 1
     pend["_esperando"] = sum(n for e, n in pend.items() if e not in ("CONVERTIDO", "PERDIDO"))
@@ -1121,6 +1123,42 @@ def contagem(usuario=None):
                            "sem_resposta": sem_resposta_responsavel.get(n, 0),
                            "etapas": {**dict.fromkeys(STATUS, 0), **por_responsavel.get(n, {})}} for n in nomes]
     return d
+
+
+
+# 20/10/2026 (Dione): bolinha da aba ficava acesa com a última msg sendo resposta automática do
+# WhatsApp Business do lojista ("X agradece seu contato…", "Encaminhei sua mensagem…"), reação,
+# aviso de sistema ou a própria equipe. Essas não contam como "cliente falou por último".
+_RE_AUTO = re.compile(r"(?i)agradece seu contato|encaminhei sua mensagem|j[aá] conectei voc[eê]|"
+                      r"obrigad[oa] (por|pelo) (entrar em )?contato|mensagem autom[aá]tica|"
+                      r"em breve (retornaremos|responderemos|um de nossos|um atendente|entraremos)|"
+                      r"hor[aá]rio de atendimento|retornaremos (assim que|o mais breve|em breve)")
+_TIPOS_IGNORA = {"ReactionMessage", "PinInChatMessage", "UnknownMessageType", "error", "ProtocolMessage"}
+_FONES_EQUIPE = ("5511957168341",)   # Dione
+
+
+def _msg_relevante(texto, tipo):
+    t = (texto or "").strip()
+    if tipo in _TIPOS_IGNORA:
+        return False
+    if t.startswith("\u200e") or t.startswith("\u200f"):
+        return False                     # saudação/aviso automático do WhatsApp
+    if t and _RE_AUTO.search(t):
+        return False
+    return True
+
+
+def _cliente_falou_por_ultimo(c, chatid):
+    if any(str(chatid or "").startswith(f) for f in _FONES_EQUIPE):
+        return False
+    nossa = c.execute("SELECT MAX(ts) t FROM mensagens WHERE chatid=? AND from_me=1 AND excluida=0", (chatid,)).fetchone()["t"]
+    for m in c.execute("SELECT ts, texto, tipo FROM mensagens WHERE chatid=? AND from_me=0 AND excluida=0 "
+                       "ORDER BY ts DESC LIMIT 15", (chatid,)):
+        if nossa is not None and _ms(m["ts"]) <= _ms(nossa):
+            return False                 # nossa msg é a mais recente que importa
+        if _msg_relevante(m["texto"], m["tipo"]):
+            return True
+    return False
 
 
 def envia_pela_jornada(chatid, texto, usuario, sugestao_id=None):
