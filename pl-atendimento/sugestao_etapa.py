@@ -21,7 +21,8 @@ import urllib.request
 CONFIANCA = 0.8          # Haiku: mostra sugestão / concordância
 CONFIANCA_AUTO = 0.9     # Jev sozinho: sugestão (ou automático se o Haiku estiver fora)
 MODELO_HAIKU = "claude-haiku-5-5"
-AUTO_OK = {"EM CONVERSA", "INTERESSADO", "AGUARDANDO DADOS", "STAND-BY"}
+# 21/10/2026 (Dione): o Jev não move mais ninguém sozinho — só sugere; quem decide a etapa é ela, no meio da conversa.
+AUTO_OK = set()
 # Falas do "lojista" que não dizem nada sobre o interesse dele (o Jev não deve decidir em cima delas)
 ANUNCIO = re.compile(r"(?i)^\s*(oi|ol[aá])!?\s*(gostaria de saber mais sobre o|tenho interesse no|quero saber mais sobre o) (provador virtual|provou cat[aá]logo)")
 AUTOMATICA = re.compile(r"(?i)agradecemos sua mensagem|n[aã]o estamos dispon[ií]veis|seja muito bem-vind|em breve iremos te atender|hor[aá]rio de atendimento|nosso hor[aá]rio|mensagem autom[aá]tica")
