@@ -1031,7 +1031,7 @@ def comissoes(usuario):
     return {"pct": COMISSAO_PCT, "canEdit": eh_lucas, "usuario": meu, "itens": itens, "totais": totais}
 
 
-def marca_comissao(usuario, chatid, campo, marcado):
+def marca_comissao(usuario, chatid, campo, marcado, data=None):
     if (usuario or "").strip().lower() != "lucas":
         raise PermissionError("Só o Lucas pode alterar o status da comissão.")
     coluna = {"cliente_pagou": "cliente_pagou_em", "comissao_paga": "comissao_paga_em"}.get(campo)
@@ -1042,6 +1042,15 @@ def marca_comissao(usuario, chatid, campo, marcado):
         raise ValueError("Cliente sem plano fechado registrado.")
     agora = datetime.now(BRT).isoformat()
     valor = agora if marcado else None
+    # data opcional (AAAA-MM-DD): dia real do pagamento, em vez do dia em que foi marcado
+    if marcado and data:
+        try:
+            dia = datetime.strptime(str(data)[:10], "%Y-%m-%d").replace(hour=12, tzinfo=BRT)
+        except ValueError:
+            raise ValueError("Data inválida (use AAAA-MM-DD).")
+        if dia.date() > datetime.now(BRT).date():
+            raise ValueError("A data não pode ser futura.")
+        valor = dia.isoformat()
     c.execute("INSERT INTO comissoes_status(chatid," + coluna + ",atualizado_por,atualizado_em) VALUES(?,?,?,?) "
               "ON CONFLICT(chatid) DO UPDATE SET " + coluna + "=excluded." + coluna +
               ", atualizado_por=excluded.atualizado_por, atualizado_em=excluded.atualizado_em",
@@ -3367,7 +3376,7 @@ class H(BaseHTTPRequestHandler):
                     return self._send(403, json.dumps({"erro": "Origem ou formato inválido."}))
                 try:
                     return self._send(200, json.dumps(marca_comissao(self.headers.get("X-Prospeccao-User"),
-                        d.get("chatid"), d.get("campo"), bool(d.get("marcado"))), ensure_ascii=False))
+                        d.get("chatid"), d.get("campo"), bool(d.get("marcado")), d.get("data")), ensure_ascii=False))
                 except PermissionError as e:
                     return self._send(403, json.dumps({"erro": str(e)}, ensure_ascii=False))
                 except ValueError as e:
