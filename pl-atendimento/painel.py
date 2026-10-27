@@ -340,6 +340,8 @@ def cria_banco():
     CREATE TABLE IF NOT EXISTS mensagens_prontas (
       id TEXT PRIMARY KEY, rotulo TEXT NOT NULL, texto TEXT NOT NULL, ordem INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS mensagens_especiais (chave TEXT PRIMARY KEY, texto TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audios_prontos (id TEXT PRIMARY KEY, rotulo TEXT NOT NULL, seg INTEGER DEFAULT 0,
+      mime TEXT NOT NULL, ordem INTEGER DEFAULT 0, criado_em INTEGER, criado_por TEXT);
     CREATE TABLE IF NOT EXISTS edicoes_recentes (chatid TEXT, texto TEXT, ts INTEGER);
     CREATE TABLE IF NOT EXISTS conversas_vistas (chatid TEXT, usuario TEXT, ts INTEGER, PRIMARY KEY (chatid, usuario));
     CREATE INDEX IF NOT EXISTS ix_edicoes_recentes ON edicoes_recentes(chatid, ts);
@@ -505,11 +507,92 @@ MIME_PADRAO = {
 
 def fonte_audio(a):
     """O que mandar no campo 'file': o mp3 salvo aqui (base64) ou a URL de reserva."""
+    if a.get("custom"):
+        with open(caminho_audio_pronto(a["id"]), "rb") as f:
+            return "data:%s;base64,%s" % (a.get("mime") or "audio/webm", base64.b64encode(f.read()).decode())
     caminho = os.path.join(DIR_AUDIOS, a["id"] + ".mp3")
     if os.path.exists(caminho):
         with open(caminho, "rb") as f:
             return "data:audio/mpeg;base64," + base64.b64encode(f.read()).decode()
     return a["url"]
+
+
+# Áudios prontos gravados pela equipe na tela "Mensagens Personalizadas" (27/10/2026).
+# Ficam no volume persistente, ao lado do painel.db (o diretório do código some a cada deploy).
+DIR_AUDIOS_PRONTOS = os.path.join(os.path.dirname(os.path.abspath(DB)), "audios_prontos")
+MAX_AUDIO_BYTES = 6 * 1024 * 1024
+
+
+def carrega_audios_prontos():
+    rows = con().execute("SELECT id, rotulo, seg, mime FROM audios_prontos ORDER BY ordem, rowid").fetchall()
+    return [dict(r, custom=True) for r in rows]
+
+
+def todos_audios():
+    """Botões de áudio do chat: os fixos do código + os gravados pela equipe."""
+    return [dict(a, custom=False) for a in AUDIOS] + carrega_audios_prontos()
+
+
+def acha_audio(aid):
+    return next((x for x in todos_audios() if x["id"] == aid), None)
+
+
+def caminho_audio_pronto(aid):
+    if not re.fullmatch(r"a_[0-9a-f]{8}", str(aid or "")):
+        raise ValueError("Áudio inválido.")
+    return os.path.join(DIR_AUDIOS_PRONTOS, aid)
+
+
+def salva_audio_pronto(dados, usuario):
+    """Cria (com o áudio gravado) ou renomeia um áudio pronto. Devolve a lista atualizada."""
+    rotulo = str(dados.get("rotulo") or "").strip()[:60]
+    if not rotulo:
+        raise ValueError("Dê um nome pro botão do áudio.")
+    c = con()
+    aid = str(dados.get("id") or "").strip()
+    if aid and c.execute("SELECT 1 FROM audios_prontos WHERE id=?", (aid,)).fetchone():
+        c.execute("UPDATE audios_prontos SET rotulo=? WHERE id=?", (rotulo, aid))
+        c.commit()
+        return carrega_audios_prontos()
+    b64 = str(dados.get("b64") or "")
+    if "," in b64[:100]:
+        b64 = b64.split(",", 1)[1]
+    try:
+        bruto = base64.b64decode(b64, validate=True)
+    except Exception:
+        raise ValueError("Áudio inválido. Grave de novo.")
+    if len(bruto) < 1500:
+        raise ValueError("O áudio ficou vazio. Grave de novo.")
+    if len(bruto) > MAX_AUDIO_BYTES:
+        raise ValueError("Áudio muito grande. Grave um mais curto (até uns 3 minutos).")
+    mime = str(dados.get("mime") or "audio/webm").split(";")[0].strip().lower()
+    if not re.fullmatch(r"audio/[a-z0-9.+-]+", mime):
+        mime = "audio/webm"
+    try:
+        seg = max(1, min(600, int(float(dados.get("seg") or 0))))
+    except (TypeError, ValueError):
+        seg = 1
+    aid = "a_" + uuid.uuid4().hex[:8]
+    os.makedirs(DIR_AUDIOS_PRONTOS, exist_ok=True)
+    with open(caminho_audio_pronto(aid), "wb") as f:
+        f.write(bruto)
+    ordem = c.execute("SELECT COALESCE(MAX(ordem), -1) + 1 FROM audios_prontos").fetchone()[0]
+    c.execute("INSERT INTO audios_prontos(id, rotulo, seg, mime, ordem, criado_em, criado_por) VALUES(?,?,?,?,?,?,?)",
+              (aid, rotulo, seg, mime, ordem, int(time.time()), str(usuario or "")))
+    c.commit()
+    return carrega_audios_prontos()
+
+
+def exclui_audio_pronto(aid):
+    caminho = caminho_audio_pronto(aid)
+    c = con()
+    c.execute("DELETE FROM audios_prontos WHERE id=?", (aid,))
+    c.commit()
+    try:
+        os.remove(caminho)
+    except FileNotFoundError:
+        pass
+    return carrega_audios_prontos()
 
 
 def manda_audio(fone, a):
@@ -2426,6 +2509,9 @@ async function abrirLead(lead){
         title="Prepara duas mensagens e um vídeo para aprovação">${icone('book')} Provou Catálogo</button>
       ${(prontos.textos||[]).map(t=>`<button class="btn sec" onclick="poeTexto('${esc(t.id)}')" title="Insere a mensagem para revisão antes de enviar">${icone('tag')} ${esc(t.rotulo)}</button>`).join('')}
     </div>
+    ${(prontos.audios||[]).some(a=>a.custom)?`<div class="acoes atalhos atalhos-audio">
+      ${(prontos.audios||[]).filter(a=>a.custom).map(a=>`<button class="btn sec" onclick="confirmaAudio('${esc(a.id)}',this)" title="Envia este áudio pronto como mensagem de voz">${icone('mic')} ${esc(a.rotulo)} · ${a.seg}s</button>`).join('')}
+    </div>`:''}
     <label class="editor-label" for="txt">${icone('chat')} Mensagem para ${esc(d.nome||d.fone)} · ${esc(d.fone)}</label>
     <textarea id="txt" data-chatid="${esc(p.chatid)}" placeholder="Digite sua mensagem…"></textarea>
     <div class="catalogo-rascunho" id="catalogoRascunho" hidden>
@@ -2691,6 +2777,12 @@ async function enviar(){
     : '<span class="ok">'+(modo==='catalogo'?'2 mensagens + vídeo enviados ✓':
       enviadas+' mensagem'+(enviadas===1?'':'s')+' enviada'+(enviadas===1?'':'s')+' ✓')+'</span>';
 }
+function confirmaAudio(id,botao){
+  const a=prontos.audios.find(x=>x.id===id), p=destinatarioAberto();
+  if(!a||!p) return;
+  if(!confirm('Enviar o áudio "'+a.rotulo+'" ('+a.seg+'s) para '+(p.nome||p.fone)+'?')) return;
+  mandaAudio(id,botao);
+}
 async function mandaAudio(id,botao){
   const destinatario=destinatarioAberto();
   const st=document.getElementById('st'), a=prontos.audios.find(x=>x.id===id);
@@ -2912,11 +3004,24 @@ border:1px solid var(--linha);border-radius:9px;padding:9px 11px;font:inherit}
 .msg{font-size:12.5px;margin-right:auto;min-height:18px}
 .msg.ok{color:var(--verde)}.msg.erro{color:var(--vermelho)}
 .vazio{grid-column:1/-1;color:var(--fraco);text-align:center;padding:30px 0}
+.secao{margin-top:34px;padding-top:22px;border-top:1px solid var(--linha)}
+.secao h2{font-size:17px;margin:0 0 4px}.secao p{color:var(--fraco);font-size:13px;margin:0 0 14px}
+#audios{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:14px;align-items:start}
+.gravar{display:flex;align-items:center;gap:10px;margin-top:10px}
+.gravar .rec{background:#fff;color:var(--vermelho);border:1px solid var(--linha)}
+.gravar .rec.on{background:var(--vermelho);color:#fff;border-color:var(--vermelho)}
+.gravar .tempo{font-variant-numeric:tabular-nums;color:var(--fraco);font-size:13px;min-width:38px}
+.card audio{width:100%;height:36px;margin-top:10px}
+.selo{display:inline-block;font-size:11px;color:var(--fraco);border:1px solid var(--linha);border-radius:999px;padding:1px 8px;margin-left:6px}
 </style></head><body><div class="wrap">
 <div class="topo"><h1>Mensagens Personalizadas</h1>
 <p>Essas mensagens viram botões no chat e no disparo em massa. Edite, crie ou apague à vontade. As de <b>Abordagem</b> e <b>Provou Catálogo</b> mandam 2 mensagens (o Catálogo ainda manda o vídeo no fim); na Abordagem, use <b>{nome}</b> onde entra o nome do cliente.</p>
 <button class="novo" onclick="nova()">+ Nova mensagem</button></div>
 <div id="lista"><div class="vazio">Carregando…</div></div>
+<div class="secao"><h2>Áudios prontos</h2>
+<p>Grave aqui os áudios que você manda sempre. Cada um vira um botão no chat do atendimento e é enviado como mensagem de voz, depois de você confirmar.</p>
+<button class="novo" onclick="novoAudio()">+ Gravar áudio</button>
+<div id="audios"></div></div>
 </div><script>
 const lista=document.getElementById('lista');
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -2995,7 +3100,92 @@ async function excluir(bt){
     pinta(d.itens);
   }catch(e){aviso(bt,'Erro de conexão.',false);bt.disabled=false}
 }
+// ── Áudios prontos ──
+const audiosEl=document.getElementById('audios');
+function fmt(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function cardAudio(a){
+  return `<div class="card" data-id="${esc(a.id)}">
+    <label>Nome do botão <span class="selo">${fmt(a.seg)}</span></label>
+    <input class="c-rotulo" value="${esc(a.rotulo)}" maxlength="60">
+    <audio controls preload="none" src="/api/mensagens/audios/ouvir?id=${encodeURIComponent(a.id)}"></audio>
+    <div class="foot"><span class="msg"></span>
+      <button class="btn excluir" onclick="excluirAudio(this)">Excluir</button>
+      <button class="btn salvar" onclick="renomearAudio(this)">Salvar nome</button></div></div>`;
+}
+function pintaAudios(itens){
+  audiosEl.innerHTML=(itens||[]).length?itens.map(cardAudio).join(''):'<div class="vazio">Nenhum áudio pronto ainda. Clique em “+ Gravar áudio”.</div>';
+}
+let gravacao=null;
+function novoAudio(){
+  if(audiosEl.querySelector('.card[data-novo]')) return;
+  const w=document.createElement('div');
+  w.innerHTML=`<div class="card" data-novo="1">
+    <label>Nome do botão</label>
+    <input class="c-rotulo" placeholder="Ex.: Explicação do teste grátis" maxlength="60">
+    <div class="gravar"><button class="btn rec" onclick="alternaGravacao(this)">● Gravar</button><span class="tempo">0:00</span></div>
+    <audio controls style="display:none"></audio>
+    <div class="foot"><span class="msg"></span>
+      <button class="btn excluir" onclick="cancelaNovo(this)">Cancelar</button>
+      <button class="btn salvar" onclick="salvarAudio(this)" disabled>Salvar áudio</button></div></div>`;
+  const vazio=audiosEl.querySelector('.vazio'); if(vazio) vazio.remove();
+  audiosEl.insertBefore(w.firstElementChild,audiosEl.firstElementChild);
+  audiosEl.querySelector('.card[data-novo] .c-rotulo').focus();
+}
+function cancelaNovo(bt){ paraTudo(); bt.closest('.card').remove(); if(!audiosEl.children.length) pintaAudios([]); }
+function paraTudo(){ if(gravacao){ clearInterval(gravacao.cron); try{ if(gravacao.rec.state==='recording') gravacao.rec.stop(); }catch(e){} gravacao.stream.getTracks().forEach(t=>t.stop()); gravacao=null; } }
+async function alternaGravacao(bt){
+  const c=bt.closest('.card');
+  if(gravacao&&gravacao.rec.state==='recording'){ gravacao.rec.stop(); return; }
+  let stream;
+  try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ aviso(bt,'Libere o microfone no navegador para gravar.',false); return; }
+  const rec=new MediaRecorder(stream), partes=[], t0=Date.now();
+  gravacao={rec,stream,cron:setInterval(()=>{c.querySelector('.tempo').textContent=fmt((Date.now()-t0)/1000)},250)};
+  rec.ondataavailable=e=>{ if(e.data.size) partes.push(e.data); };
+  rec.onstop=()=>{ clearInterval(gravacao&&gravacao.cron); stream.getTracks().forEach(t=>t.stop());
+    const blob=new Blob(partes,{type:rec.mimeType||'audio/webm'});
+    c._blob=blob; c._seg=(Date.now()-t0)/1000; gravacao=null;
+    const au=c.querySelector('audio'); au.src=URL.createObjectURL(blob); au.style.display='block';
+    bt.classList.remove('on'); bt.textContent='● Gravar de novo';
+    c.querySelector('.salvar').disabled=false; aviso(bt,'Ouça antes de salvar.',true); };
+  rec.start(); bt.classList.add('on'); bt.textContent='■ Parar'; c.querySelector('.salvar').disabled=true;
+}
+async function salvarAudio(bt){
+  const c=bt.closest('.card'), rotulo=c.querySelector('.c-rotulo').value.trim();
+  if(!rotulo){ aviso(bt,'Dê um nome pro botão.',false); return; }
+  if(!c._blob){ aviso(bt,'Grave o áudio primeiro.',false); return; }
+  bt.disabled=true; aviso(bt,'Salvando…',true);
+  try{
+    const b64=await new Promise((ok,no)=>{const fr=new FileReader(); fr.onerror=()=>no(); fr.onload=()=>ok(fr.result); fr.readAsDataURL(c._blob);});
+    const r=await fetch('/api/mensagens/audios/salvar',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({rotulo,b64,mime:c._blob.type,seg:c._seg})});
+    const d=await r.json();
+    if(!r.ok||d.erro){ aviso(bt,d.erro||'Não deu pra salvar.',false); bt.disabled=false; return; }
+    pintaAudios(d.audios);
+  }catch(e){ aviso(bt,'Erro de conexão.',false); bt.disabled=false; }
+}
+async function renomearAudio(bt){
+  const c=bt.closest('.card'); bt.disabled=true;
+  try{
+    const r=await fetch('/api/mensagens/audios/salvar',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:c.dataset.id,rotulo:c.querySelector('.c-rotulo').value})});
+    const d=await r.json();
+    if(!r.ok||d.erro){ aviso(bt,d.erro||'Não deu pra salvar.',false); bt.disabled=false; return; }
+    aviso(bt,'Salvo!',true); bt.disabled=false;
+  }catch(e){ aviso(bt,'Erro de conexão.',false); bt.disabled=false; }
+}
+async function excluirAudio(bt){
+  if(!confirm('Apagar este áudio pronto?')) return;
+  const c=bt.closest('.card'); bt.disabled=true;
+  try{
+    const r=await fetch('/api/mensagens/audios/excluir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:c.dataset.id})});
+    const d=await r.json();
+    if(!r.ok||d.erro){ aviso(bt,d.erro||'Não deu pra apagar.',false); bt.disabled=false; return; }
+    pintaAudios(d.audios);
+  }catch(e){ aviso(bt,'Erro de conexão.',false); bt.disabled=false; }
+}
 carrega();
+fetch('/api/mensagens',{cache:'no-store'}).then(r=>r.json()).then(d=>pintaAudios(d.audios)).catch(()=>pintaAudios([]));
 </script></body></html>"""
 
 
@@ -3063,10 +3253,20 @@ class H(BaseHTTPRequestHandler):
                 if (q.get("view") or [""])[0] == "mensagens":
                     return self._send(200, PAGINA_MENSAGENS, "text/html; charset=utf-8")
                 return self._send(200, PAGINA, "text/html; charset=utf-8")
+            if p.path == "/api/mensagens/audios/ouvir":
+                try:
+                    aid = (q.get("id") or [""])[0]
+                    a = next((x for x in carrega_audios_prontos() if x["id"] == aid), None)
+                    if not a:
+                        return self._send(404, json.dumps({"erro": "Áudio não encontrado."}, ensure_ascii=False))
+                    with open(caminho_audio_pronto(aid), "rb") as f:
+                        return self._send_media(f.read(), a["mime"])
+                except (ValueError, FileNotFoundError):
+                    return self._send(404, json.dumps({"erro": "Áudio não encontrado."}, ensure_ascii=False))
             if p.path == "/api/mensagens":
                 esp = carrega_especiais()
                 return self._send(200, json.dumps(
-                    {"itens": carrega_textos(),
+                    {"itens": carrega_textos(), "audios": carrega_audios_prontos(),
                      "especiais": [{"chave": k, "rotulo": r, "texto": esp[k]} for k, r in ESPECIAIS_META]},
                     ensure_ascii=False))
             if p.path == "/api/catalogo/video":
@@ -3111,7 +3311,7 @@ class H(BaseHTTPRequestHandler):
             if p.path == "/api/prontos":
                 esp = carrega_especiais()
                 return self._send(200, json.dumps(
-                    {"audios": AUDIOS, "textos": carrega_textos(), "combos": COMBOS,
+                    {"audios": todos_audios(), "textos": carrega_textos(), "combos": COMBOS,
                      "catalogo": [esp["catalogo_1"], esp["catalogo_2"]],
                      "abordagem": [esp["abordagem_1"], esp["abordagem_2"]],
                      "status": STATUS,
@@ -3459,7 +3659,9 @@ class H(BaseHTTPRequestHandler):
             if self.path == "/api/catalogo/video":
                 return self._fundo(lambda: envia_midia_atendimento(lambda: manda_video_catalogo(d["fone"]), d["fone"], nome_responsavel(self.headers.get("X-Prospeccao-User"))))
             if self.path == "/api/audio":
-                a = next((x for x in AUDIOS if x["id"] == d["id"]), None)
+                a = acha_audio(d.get("id"))
+                if not a:
+                    return self._send(404, json.dumps({"erro": "Esse áudio não existe mais. Atualize a página."}, ensure_ascii=False))
                 return self._fundo(lambda: envia_midia_atendimento(lambda: manda_audio(d["fone"], a), d["fone"], nome_responsavel(self.headers.get("X-Prospeccao-User"))))
             if self.path == "/api/gravado":
                 fone = MEU_NUMERO if d.get("teste") else d["fone"]
@@ -3484,6 +3686,15 @@ class H(BaseHTTPRequestHandler):
 
                 threading.Thread(target=roda, daemon=True).start()
                 return self._send(200, json.dumps({"ok": True}))
+            if self.path in ("/api/mensagens/audios/salvar", "/api/mensagens/audios/excluir"):
+                try:
+                    if self.path.endswith("salvar"):
+                        itens = salva_audio_pronto(d, self.headers.get("X-Prospeccao-User"))
+                    else:
+                        itens = exclui_audio_pronto(d.get("id"))
+                    return self._send(200, json.dumps({"ok": True, "audios": itens}, ensure_ascii=False))
+                except ValueError as e:
+                    return self._send(400, json.dumps({"erro": str(e)}, ensure_ascii=False))
             if self.path == "/api/mensagens/salvar":
                 try:
                     return self._send(200, json.dumps(
