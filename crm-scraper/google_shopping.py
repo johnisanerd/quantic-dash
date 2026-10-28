@@ -60,18 +60,25 @@ def buscar_google_shopping(client: ApifyClient, queries: list[str], country: str
     for query in queries:
         print(f"\n  Google Shopping [{country}]: '{query}' (limite: {limit})")
         try:
-            run = client.actor("crawlerbros/google-shopping-insights").call(
+            run = client.actor("johnvc/google-shopping-api-google-shopping-products-prices-deals").call(
                 run_input={
-                    "queries": [query],
-                    "maxResultsPerQuery": limit,
-                    "countryCode": country,
-                    "languageCode": country,
+                    "q": query,
+                    "gl": country,
+                    "hl": {"br": "pt-br", "us": "en", "es": "es"}.get(country, "en"),
+                    "max_pages": max(1, -(-limit // 40)),  # ~40 produtos por pagina
                 }
             )
             if run["status"] != "SUCCEEDED":
                 print(f"    ERRO: {run['status']}")
                 continue
-            items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+            # Um item por pagina; os produtos vem em shopping_results
+            items = []
+            for pagina in client.dataset(run["defaultDatasetId"]).iterate_items():
+                if pagina.get("error_message"):
+                    print(f"    ERRO: {pagina['error_message']}")
+                    continue
+                items.extend(pagina.get("shopping_results") or [])
+            items = items[:limit]
             print(f"    {len(items)} produtos")
             todos.extend(items)
         except Exception as e:
@@ -158,12 +165,12 @@ def main():
     sites_merchant: dict[str, str] = {}  # dominio -> merchant name
 
     for item, cat in todos_produtos:
-        merchant = (item.get("merchant") or "").strip()
+        merchant = (item.get("source") or "").strip()
         if not merchant or any(b in merchant.lower() for b in BLOCKED_MERCHANTS):
             continue
 
         # Tenta pegar URL do produto pra extrair dominio
-        link = item.get("link") or item.get("productLink") or item.get("merchantUrl") or ""
+        link = item.get("link") or ""
         dominio = extrair_dominio(link) if link else None
         if not dominio:
             continue
