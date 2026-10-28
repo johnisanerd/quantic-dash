@@ -363,6 +363,19 @@ def cria_banco():
                   "AND date(CASE WHEN m.ts>100000000000 THEN m.ts/1000 ELSE m.ts END,'unixepoch','-3 hours')<'2026-09-14' "
                   "GROUP BY m.chatid ON CONFLICT(chatid,responsavel) DO UPDATE SET ts=MIN(ts,excluded.ts)")
         c.execute("INSERT INTO metricas_migracoes(nome) VALUES('primeiro_envio_v1')")
+    if not c.execute("SELECT 1 FROM metricas_migracoes WHERE nome='limpa_plano_ivan_v1'").fetchone():
+        # IVAN ARAUJO tinha plano fechado (Crescimento, 26/10) mas nunca pagou: tira o
+        # plano para não voltar em Comissões. Backup da linha em planos_fechados_removidos.
+        c.execute("CREATE TABLE IF NOT EXISTS planos_fechados_removidos ("
+                  "chatid TEXT, lead_id TEXT, plano TEXT, valor_centavos INTEGER, fechado_em TEXT,"
+                  " atualizado_em TEXT, removido_em TEXT, motivo TEXT)")
+        alvo = "5521986801007@s.whatsapp.net"
+        c.execute("INSERT INTO planos_fechados_removidos SELECT chatid,lead_id,plano,valor_centavos,fechado_em,"
+                  "atualizado_em,?,? FROM planos_fechados WHERE chatid=?",
+                  (datetime.now(BRT).isoformat(), "nunca pagou (pedido do Lucas 28/10)", alvo))
+        n = c.execute("DELETE FROM planos_fechados WHERE chatid=?", (alvo,)).rowcount
+        print(f"[migracao limpa_plano_ivan_v1] planos_fechados removidos: {n}", flush=True)
+        c.execute("INSERT INTO metricas_migracoes(nome) VALUES('limpa_plano_ivan_v1')")
     c.commit()
     CRM_CLIENT.setup()
     # migracao: bancos criados antes do "remover da fila" nao tem essa coluna
@@ -1077,9 +1090,10 @@ COMISSAO_PCT = 20  # % sobre a 1ª mensalidade que o cliente paga
 
 
 def comissoes(usuario):
-    """Comissão do comercial por cliente convertido (plano registrado em planos_fechados).
-    Dione vê só as dela; Lucas vê todas. Status: aguardando o cliente pagar ->
-    cliente pagou (comissão a receber) -> comissão paga."""
+    """Comissão do comercial por cliente que JÁ PAGOU (plano em planos_fechados +
+    cliente_pagou_em marcado). Plano fechado sem pagamento não aparece (regra do
+    Lucas, 28/10). Dione vê só as dela; Lucas vê todas. Status: cliente pagou
+    (comissão a receber) -> comissão paga."""
     eh_lucas = (usuario or "").strip().lower() == "lucas"
     c = con()
     linhas = c.execute(
@@ -1093,18 +1107,15 @@ def comissoes(usuario):
     # Só o Lucas vê todo mundo; a Dione só os clientes dela; qualquer outro login, nada.
     meu = "Lucas" if eh_lucas else ("Dione" if u == "dione" else None)
     itens = []
-    totais = {"prevista": 0, "a_receber": 0, "paga": 0}
+    totais = {"a_receber": 0, "paga": 0}
     for r in linhas:
         resp = r["responsavel"] or ""
         if not eh_lucas and (meu is None or resp != meu):
             continue
+        if not r["cliente_pagou_em"]:
+            continue  # só entra quem realmente pagou
         comissao = round(r["valor_centavos"] * COMISSAO_PCT / 100)
-        if r["comissao_paga_em"]:
-            situacao = "paga"
-        elif r["cliente_pagou_em"]:
-            situacao = "a_receber"
-        else:
-            situacao = "prevista"
+        situacao = "paga" if r["comissao_paga_em"] else "a_receber"
         totais[situacao] += comissao
         itens.append({"chatid": r["chatid"], "cliente": r["nome"] or r["fone"] or r["chatid"],
                       "fone": r["fone"], "responsavel": resp or None, "plano": r["plano"],

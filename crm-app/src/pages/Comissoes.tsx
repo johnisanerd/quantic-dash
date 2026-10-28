@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-type Situacao = "prevista" | "a_receber" | "paga";
+type Situacao = "a_receber" | "paga";
 type Item = {
   chatid: string; cliente: string; fone: string | null; responsavel: string | null; plano: string;
   mensalidade_centavos: number; comissao_centavos: number; fechado_em: string;
@@ -12,7 +12,6 @@ const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency"
 const data = (v: string | null) => v ? new Date(v).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—";
 
 const SIT: Record<Situacao, { label: string; cls: string; hint: string }> = {
-  prevista: { label: "Aguardando cliente pagar", cls: "bg-amber/10 text-amber", hint: "Cliente fechou, ainda não pagou a 1ª mensalidade" },
   a_receber: { label: "A receber", cls: "bg-cyan/10 text-cyan", hint: "Cliente pagou — comissão liberada" },
   paga: { label: "Paga", cls: "bg-emerald/10 text-emerald", hint: "Comissão já paga ao vendedor" },
 };
@@ -51,7 +50,7 @@ export default function Comissoes() {
 
   const responsaveis = useMemo(() => [...new Set((d?.itens || []).map(i => i.responsavel || "Sem responsável"))], [d]);
   const itens = (d?.itens || []).filter(i => (!resp || (i.responsavel || "Sem responsável") === resp) && (!sit || i.situacao === sit));
-  const tot = itens.reduce((a, i) => { a[i.situacao] += i.comissao_centavos; return a; }, { prevista: 0, a_receber: 0, paga: 0 } as Record<Situacao, number>);
+  const tot = itens.reduce((a, i) => { a[i.situacao] += i.comissao_centavos; return a; }, { a_receber: 0, paga: 0 } as Record<Situacao, number>);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
@@ -59,7 +58,7 @@ export default function Comissoes() {
         <div>
           <h1 className="text-2xl font-semibold text-bright">Comissões</h1>
           <p className="mt-1 text-sm text-muted">
-            {d ? `${d.pct}% sobre a 1ª mensalidade de cada cliente fechado.` : "Comissão do comercial por cliente fechado."}
+            {d ? `${d.pct}% sobre a 1ª mensalidade — só clientes que já pagaram.` : "Comissão do comercial por cliente que já pagou."}
             {d && !d.canEdit && ` Mostrando as comissões de ${d.usuario}.`}
           </p>
         </div>
@@ -68,8 +67,8 @@ export default function Comissoes() {
 
       {error && <div role="alert" className="rounded-lg border border-rose/40 px-4 py-3 text-sm text-rose">{error}</div>}
 
-      <section className="grid gap-3 sm:grid-cols-3">
-        {(["a_receber", "prevista", "paga"] as Situacao[]).map(k => (
+      <section className="grid gap-3 sm:grid-cols-2">
+        {(["a_receber", "paga"] as Situacao[]).map(k => (
           <button key={k} onClick={() => setSit(sit === k ? "" : k)} aria-pressed={sit === k}
             className={`rounded-xl border p-4 text-left transition ${sit === k ? "border-violet bg-active-bg" : "border-edge-subtle bg-raised hover:border-edge"}`}>
             <span className="text-xs text-muted">{SIT[k].label}</span>
@@ -91,7 +90,7 @@ export default function Comissoes() {
 
       <section className="overflow-x-auto rounded-xl border border-edge-subtle bg-raised">
         {loading ? <p className="p-6 text-sm text-muted">Carregando…</p> :
-          !itens.length ? <p className="p-6 text-sm text-muted">Nenhum cliente fechado com plano registrado{sit ? " nessa situação" : ""}. Para contar aqui, o cliente precisa ir para <b>Convertido</b> com o plano registrado em “Registrar plano fechado”.</p> :
+          !itens.length ? <p className="p-6 text-sm text-muted">Nenhum cliente pagante{sit ? " nessa situação" : ""}. Para contar aqui, o cliente precisa estar em <b>Convertido</b> com o plano registrado e a 1ª mensalidade paga.</p> :
           <table className="w-full min-w-[760px] text-sm">
             <thead className="text-left text-xs text-muted">
               <tr className="border-b border-edge-subtle">
