@@ -1092,7 +1092,8 @@ COMISSAO_PCT = 20  # % sobre a 1ª mensalidade que o cliente paga
 def comissoes(usuario):
     """Comissão do comercial por cliente que JÁ PAGOU (plano em planos_fechados +
     cliente_pagou_em marcado). Plano fechado sem pagamento não aparece (regra do
-    Lucas, 28/10). Dione vê só as dela; Lucas vê todas. Status: cliente pagou
+    Lucas, 28/10). Só entram clientes da Dione (o Lucas não recebe comissão);
+    os logins dione e lucas veem as mesmas linhas. Status: cliente pagou
     (comissão a receber) -> comissão paga."""
     eh_lucas = (usuario or "").strip().lower() == "lucas"
     c = con()
@@ -1104,13 +1105,17 @@ def comissoes(usuario):
         "  LEFT JOIN comissoes_status cs ON cs.chatid = pf.chatid"
         " ORDER BY pf.fechado_em DESC").fetchall()
     u = (usuario or "").strip().lower()
-    # Só o Lucas vê todo mundo; a Dione só os clientes dela; qualquer outro login, nada.
+    # Logins lucas e dione veem as comissões da Dione; qualquer outro login, nada.
     meu = "Lucas" if eh_lucas else ("Dione" if u == "dione" else None)
     itens = []
     totais = {"a_receber": 0, "paga": 0}
     for r in linhas:
         resp = r["responsavel"] or ""
-        if not eh_lucas and (meu is None or resp != meu):
+        if meu is None:
+            continue
+        # Só a Dione recebe comissão (Lucas, 28/10): linhas do Lucas ou sem
+        # responsável não aparecem para ninguém. O Lucas vê as da Dione.
+        if resp.strip().lower() != "dione":
             continue
         if not r["cliente_pagou_em"]:
             continue  # só entra quem realmente pagou

@@ -59,7 +59,7 @@ export default function Comissoes() {
           <h1 className="text-2xl font-semibold text-bright">Comissões</h1>
           <p className="mt-1 text-sm text-muted">
             {d ? `${d.pct}% sobre a 1ª mensalidade — só clientes que já pagaram.` : "Comissão do comercial por cliente que já pagou."}
-            {d && !d.canEdit && ` Mostrando as comissões de ${d.usuario}.`}
+            {d && " Mostrando as comissões da Dione."}
           </p>
         </div>
         <button onClick={() => { setLoading(true); void load(); }} className="rounded-lg border border-edge px-4 py-2 text-sm text-muted hover:text-bright">Atualizar</button>
